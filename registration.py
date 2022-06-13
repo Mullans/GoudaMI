@@ -3,6 +3,11 @@ import SimpleITK as sitk
 import urllib
 from .smart_image import SmartImage
 
+try:
+    sitk.ElastixImageFilter
+except AttributeError:
+    raise ImportError("These methods require the SimpleElastix extension to SimpleITK - check simpleelastix.github.io for more info.")
+
 # https://github.com/SuperElastix/ElastixModelZoo/tree/master/models
 PARAMETERS = {
     54: 'https://raw.githubusercontent.com/SuperElastix/ElastixModelZoo/master/models/Par0054/Par0054_sstvd.txt',
