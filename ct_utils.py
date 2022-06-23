@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 import glob
 import os
 import warnings
@@ -430,7 +431,7 @@ def resample_to_ref(im, ref, outside_val=0, interp=sitk.sitkNearestNeighbor):
 
 def get_sampling_info(image):
     """Get the sampling info of an image for resample_to_ref"""
-    if isinstance(image, str):
+    if isinstance(image, (str, gouda.GoudaPath)):
         image = read_meta(image)
     if isinstance(image, (sitk.Image, sitk.ImageFileReader, SmartImage)):
         result = {
@@ -459,9 +460,61 @@ def get_sampling_info(image):
 def compare_physical(image1, image2):
     info1 = image1 if isinstance(image1, dict) else get_sampling_info(image1)
     info2 = image2 if isinstance(image2, dict) else get_sampling_info(image2)
-    info1 = {key: tuple(info1[key]) for key in info1}
-    info2 = {key: tuple(info2[key]) for key in info2}
-    return info1 == info2
+    if info1.keys() != info2.keys():
+        raise ValueError('Mismatched keys between images')
+    for key in info1.keys():
+        if isinstance(info1[key], Iterable):
+            key_check = tuple(info1[key]) == tuple(info2[key])
+        else:
+            key_check = info1[key] == info2[key]
+        if not key_check:
+            return False
+    return True
+
+
+def compare_dicom_images(dicom_path1, dicom_path2):
+    """Compare two dicom images and print out any differences"""
+    image1, reader1 = io.read_dicom_as_sitk(dicom_path1)
+    image2, reader2 = io.read_dicom_as_sitk(dicom_path2)
+    found_diff = False
+
+    image_check = compare_physical(image1, image2)
+    if not image_check:
+        print('Mismatched physical images')
+        found_diff = True
+
+    for slice_idx in range(image1.GetSize()[2]):
+        keys1 = set(reader1.GetMetaDataKeys(slice_idx))
+        keys2 = set(reader2.GetMetaDataKeys(slice_idx))
+        merged = keys1.union(keys2)
+        if len(merged) != len(keys1) or len(merged) != len(keys2):
+            print('Slice {:03d} has mismatched keys - image 1 = {} keys, image 2 = {} keys'.format(slice_idx, len(keys1), len(keys2)))
+            found_diff = True
+            diff1 = keys1.difference(keys2)
+            if len(diff1) != 0:
+                print('\tKeys in 1 but not in 2')
+                for key in diff1:
+                    print('\t{}'.format(key))
+            diff2 = keys2.difference(keys1)
+            if len(diff2) != 0:
+                print('\tKeys in 2 but not in 1')
+                for key in diff2:
+                    print('\t{}'.format(key))
+            print()
+        first_line = True
+        for key in merged:
+            val1 = reader1.GetMetaData(slice_idx, key)
+            val2 = reader2.GetMetaData(slice_idx, key)
+            if val1 != val2:
+                found_diff = True
+                if first_line:
+                    print('Slice {:03d} has mismatched key values'.format(slice_idx))
+                    first_line = False
+                print('Key: {:7s}'.format(key))
+                print('Image1: {}'.format(val1))
+                print('Image2: {}'.format(val2))
+    if not found_diff:
+        print('No differences found')
 
 
 def get_scaled_sampling_info(src_image, scaling_factor=0.5):
@@ -648,8 +701,18 @@ def read_meta(image_path):
     if isinstance(image_path, gouda.GoudaPath):
         image_path = image_path.path
     if os.path.isdir(image_path):
+        dicom_dir = io.search_for_dicom(image_path)
+        if len(dicom_dir) == 0:
+            raise ValueError('No dicom files found at: {}'.format(image_path))
+        elif len(dicom_dir) > 1:
+            warnings.warn('Multiple dicom directories found - using first found: {}'.format(dicom_dir[0]))
+        image_path = dicom_dir[0]
         dicom_files = sorted(glob.glob(os.path.join(image_path, '*.dcm')))
         image_path = dicom_files[0]
+        print(image_path)
+        if len(dicom_files) > 1:
+            warnings.warn('Meta is only read for a single dcm file in the directory. Use GoudaMI.io.read_dicom_as_sitk for all slices.')
+
     file_reader = sitk.ImageFileReader()
     file_reader.SetFileName(image_path)
     file_reader.ReadImageInformation()

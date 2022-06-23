@@ -63,6 +63,33 @@ def read_sitk(path, allow_search=True):
         return sitk.ReadImage(path)
 
 
+def read_dicom_as_sitk(path):
+    import SimpleITK as sitk
+    """Similar to read_sitk, but dicom specific and includes all meta tags"""
+    possible = search_for_dicom(path)
+    if len(possible) == 0:
+        raise ValueError('No dicom images found within "{}"'.format(path))
+    elif len(possible) > 1:
+        warnings.warn('Multiple dicom directories found. Using "{}"'.format(possible[0]))
+    else:
+        pass
+    path = possible[0]
+
+    series_IDs = sitk.ImageSeriesReader.GetGDCMSeriesIDs(path)
+    if not series_IDs:
+        raise ValueError('Directory {} does not contain dicoms'.format(path))
+    series_file_names = sitk.ImageSeriesReader.GetGDCMSeriesFileNames(path, series_IDs[0])
+
+    series_reader = sitk.ImageSeriesReader()
+    series_reader.SetFileNames(series_file_names)
+
+    series_reader.MetaDataDictionaryArrayUpdateOn()  # needed to load tags
+    series_reader.LoadPrivateTagsOn()  # needed to load private tags too
+    image = series_reader.Execute()
+
+    return image, series_reader
+
+
 def search_for_dicom(base_dir):
     possible = []
     for root, dirs, files in os.walk(base_dir):
