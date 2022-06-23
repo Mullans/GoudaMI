@@ -46,7 +46,11 @@ class SmartImage(object):
         self.__itk_image: itk.Image = None
         self.__updated_itk: bool = False
         self.__updated_sitk: bool = False
+        # These are calculated only as needed
         self.__unique_labels: tuple = None
+        self.__minimum_intensity = None
+        self.__maximum_intensity = None
+
         self.default_type = default_type
         if hasattr(path, 'abspath'):
             path = path.abspath
@@ -84,6 +88,31 @@ class SmartImage(object):
             self.path = path
         # self.image
 
+    def __reset_internals(self):
+        self.__minimum_intensity = None
+        self.__maximum_intensity = None
+        self.__unique_labels = None
+
+    def __run_minmax(self):
+        image = self.image
+        if isinstance(image, sitk.Image):
+            filt = sitk.MinimumMaximumImageFilter()
+            filt.Execute(image)
+            self.__maximum_intensity = filt.GetMaximum()
+            self.__minimum_intensity = filt.GetMinimum()
+        elif isinstance(image, itk.Image):
+            pass
+
+    def min(self):
+        if self.__minimum_intensity is None:
+            self.__run_minmax()
+        return self.__minimum_intensity
+
+    def max(self):
+        if self.__maximum_intensity is None:
+            self.__run_minmax()
+        return self.__maximum_intensity
+
     @property
     def dtype(self):
         image = self.image
@@ -114,6 +143,7 @@ class SmartImage(object):
     @property
     def itk_image(self):
         if self.__updated_sitk:
+            self.__reset_internals()
             self.__itk_image = self.__sitk2itk(self.sitk_image)
             self.__updated_sitk = False
         if self.__itk_image is None:
@@ -123,6 +153,7 @@ class SmartImage(object):
     @property
     def sitk_image(self):
         if self.__updated_itk:
+            self.__reset_internals()
             self.__sitk_image = self.__itk2sitk(self.itk_image)
             self.__updated_itk = False
         if self.__sitk_image is None:
@@ -143,7 +174,7 @@ class SmartImage(object):
                 file_reader.SetFileName(dicom_files[0])
                 file_reader.ReadImageInformation()
                 series_id = file_reader.GetMetaData('0020|000e')
-                sorted_file_names = sitk.ImageSeriesReader.GetGDCMSeriesFileNames(path, series_id)
+                sorted_file_names = sitk.ImageSeriesReader.GetGDCMSeriesFileNames(self.path, series_id)
                 self.__sitk_image = sitk.ReadImage(sorted_file_names)
             else:
                 self.__sitk_image = sitk.ReadImage(self.path)
@@ -266,6 +297,12 @@ class SmartImage(object):
         if isinstance(ref_image, sitk.Image) and isinstance(image, sitk.Image):
             # Easiest case: sitk -> sitk
             image.CopyInformation(ref_image)
+        elif isinstance(ref_image, SmartImage) and isinstance(ref_image.image, sitk.Image) and isinstance(image, sitk.Image):
+            image.CopyInformation(ref_image.image)
+        elif isinstance(ref_image, dict):
+            image.SetOrigin(ref_image['origin'])
+            image.SetDirection(ref_image['direction'])
+            image.SetSpacing(ref_image['spacing'])
         else:
             if not isinstance(ref_image, SmartImage):
                 ref_image = SmartImage(ref_image)
@@ -282,7 +319,7 @@ class SmartImage(object):
         return self
 
     def unique(self):
-        if self.__unique_labels is None or self.__updated_itk or self.__updated_sitk:
+        if self.__unique_labels is None:
             label_filt = sitk.LabelShapeStatisticsImageFilter()
             label_filt.Execute(self.sitk_image)
             self.labels = label_filt.GetLabels()
@@ -295,6 +332,7 @@ class SmartImage(object):
         elif isinstance(image, itk.Image):
             self.__itk_image = image
             self.__updated_itk = True
+        self.__reset_internals()
         return self
 
     def write(self, dest_path, image_type=None, compression=0):
@@ -404,6 +442,8 @@ class SmartImage(object):
             if os.path.isdir(ref):
                 dicom_files = sorted(glob.glob(os.path.join(ref, '*.dcm')))
                 image_path = dicom_files[0]
+            else:
+                image_path = ref
             file_reader = sitk.ImageFileReader()
             file_reader.SetFileName(image_path)
             file_reader.ReadImageInformation()
