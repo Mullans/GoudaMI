@@ -47,9 +47,7 @@ class SmartImage(object):
         self.__updated_itk: bool = False
         self.__updated_sitk: bool = False
         # These are calculated only as needed
-        self.__unique_labels: tuple = None
-        self.__minimum_intensity = None
-        self.__maximum_intensity = None
+        self.__reset_internals()
 
         self.default_type = default_type
         if hasattr(path, 'abspath'):
@@ -92,6 +90,10 @@ class SmartImage(object):
         self.__minimum_intensity = None
         self.__maximum_intensity = None
         self.__unique_labels = None
+        self.__mean_intensity = None
+        self.__sum_intensity = None
+        self.__stddev_intensity = None
+        self.__var_intensity = None
 
     def __run_minmax(self):
         image = self.image
@@ -101,7 +103,19 @@ class SmartImage(object):
             self.__maximum_intensity = filt.GetMaximum()
             self.__minimum_intensity = filt.GetMinimum()
         elif isinstance(image, itk.Image):
-            pass
+            raise NotImplementedError('This is on the todo list')
+        
+    def __run_image_stats(self):
+        image = self.image
+        if isinstance(image, sitk.Image):
+            filt = sitk.StatisticsImageFilter()
+            filt.Execute(image)
+            self.__maximum_intensity = filt.GetMaximum()
+            self.__minimum_intensity = filt.GetMinimum()
+            self.__mean_intensity = filt.GetMean()
+            self.__sum_intensity = filt.GetSum()
+            self.__stddev_intensity = filt.GetSigma()
+            self.__var_intensity = filt.GetVariance()
 
     def min(self):
         if self.__minimum_intensity is None:
@@ -112,6 +126,26 @@ class SmartImage(object):
         if self.__maximum_intensity is None:
             self.__run_minmax()
         return self.__maximum_intensity
+    
+    def mean(self):
+        if self.__mean_intensity is None:
+            self.__run_image_stats()
+        return self.__mean_intensity
+    
+    def sum(self):
+        if self.__sum_intensity is None:
+            self.__run_image_stats()
+        return self.__sum_intensity
+    
+    def stddev(self):
+        if self.__stddev_intensity is None:
+            self.__run_image_stats()
+        return self.__stddev_intensity
+    
+    def variance(self):
+        if self.__var_intensity is None:
+            self.__run_image_stats()
+        return self.__var_intensity
 
     @property
     def dtype(self):
@@ -317,6 +351,8 @@ class SmartImage(object):
         else:
             raise ValueError('Should never be here')
         return self
+    
+    #TODO - allow setting each physical value
 
     def unique(self):
         if self.__unique_labels is None:
@@ -428,7 +464,16 @@ class SmartImage(object):
         else:
             return SmartImage(result)
 
-    def resample_to_ref(self, ref, outside_val=0, interp=sitk.sitkNearestNeighbor, in_place=False):
+    def resample_to_ref(self, ref, interp='auto', outside_val=None, in_place=False):
+        if interp == 'auto':
+            if self.min() == 0 and self.max() < 255 and 'f' not in str(self.dtype):
+                #  This should be a label
+                interp = sitk.sitkNearestNeighbor
+            else:  
+                # This should be an image
+                interp = sitk.sitkBSpline
+        if outside_val is None:
+            outside_val = self.min()
         image = self.sitk_image
         resampleFilter = sitk.ResampleImageFilter()
         resampleFilter.SetInterpolator(interp)
@@ -533,6 +578,12 @@ class SmartImage(object):
     def __isub__(self, other):
         result = self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, in_place=True)
         self.update(result)
+        
+    def __and__(self, other):
+        return self.__perform_op(sitk.And, itk.AndImageFilter, other, in_place=False)
+        
+    def __or__(self, other):
+        return self.__perform_op(sitk.Or, itk.OrImageFilter, other, in_place=False)
 
     def __perform_op(self, sitk_op, itk_op, target, in_place=False):
         """Perform one of two operations depending on current image type
