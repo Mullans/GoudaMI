@@ -1,6 +1,8 @@
+import urllib
+
 import gouda
 import SimpleITK as sitk
-import urllib
+
 from .smart_image import SmartImage
 
 try:

@@ -40,7 +40,7 @@ def wrap4itk(func):
         converter.Update()
 
         result = itk.image_from_vtk_image(converter.GetOutput())
-
+        #FIXME - result may have different direction from input image
         if input_type.startswith('Smart'):
             _, default_type = input_type.split(',')
             return SmartImage(result, default_type=default_type)
