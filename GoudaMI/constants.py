@@ -11,6 +11,14 @@ DTYPE_MATCH_ITK = {
     np.uint16: itk.US,
 }
 
+DTYPE_STRING = {
+    'float32': [itk.F, sitk.sitkFloat32],
+    'float64': [itk.D, sitk.sitkFloat64],
+    'uint8': [itk.UC, sitk.sitkUInt8],
+    'int16': [itk.SS, sitk.sitkInt16],
+    'uint16': [itk.US, sitk.sitkUInt16]
+}
+
 
 DTYPE_MATCH_SITK = {
     np.float32: sitk.sitkFloat32,

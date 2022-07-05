@@ -1,14 +1,15 @@
 import glob
 import os
 import warnings
-from typing import Union, Optional, List
+from typing import List, Optional, Union
 
 import gouda
 import itk
 import numpy as np
 import SimpleITK as sitk
 
-from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_SITK
+from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_SITK, DTYPE_STRING
+
 # DTYPE_MATCH_ITK = {
 #     np.float32: itk.F,
 #     np.float64: itk.D,
@@ -79,14 +80,17 @@ class SmartImage(object):
                 self.__sitk_image = sitk.GetImageFromArray(path)
                 self.__itk_image = None
                 self.__updated_sitk = True
-                self.path = None
+                self.path = ''
             else:
                 raise ValueError("Unsupported datatype: {}".format(type(path)))
         else:
             self.path = path
         # self.image
 
-    def __reset_internals(self):
+    def __reset_internals(self, direction_only=False):
+        if direction_only:
+            # NOTE - only reset values where direction matters. None currently
+            return
         self.__minimum_intensity = None
         self.__maximum_intensity = None
         self.__unique_labels = None
@@ -116,6 +120,8 @@ class SmartImage(object):
             self.__sum_intensity = filt.GetSum()
             self.__stddev_intensity = filt.GetSigma()
             self.__var_intensity = filt.GetVariance()
+        elif isinstance(image, itk.Image):
+            raise NotImplementedError('ITK backed stats are yet-to-come')
 
     def min(self):
         if self.__minimum_intensity is None:
@@ -213,6 +219,10 @@ class SmartImage(object):
             else:
                 self.__sitk_image = sitk.ReadImage(self.path)
         return self.__sitk_image
+    
+    @property
+    def loaded(self):
+        return self.__sitk_image is None and self.__itk_image is None
 
     def __sitk2itk(self, image):
         """Local version of the method in convert to avoid circular imports"""
@@ -264,19 +274,24 @@ class SmartImage(object):
         image_type = self.default_type if image_type is None else image_type
         if image_type == 'sitk':
             image = self.sitk_image
-            if dtype not in DTYPE_MATCH_SITK:
+            if dtype in DTYPE_MATCH_SITK:
+                dtype = DTYPE_MATCH_SITK[dtype]
+            elif dtype in DTYPE_STRING:
+                dtype = DTYPE_STRING[dtype][1]
+            else:
                 raise ValueError("Unknown dtype: {}".format(dtype))
-            dtype = DTYPE_MATCH_SITK[dtype]
             image = sitk.Cast(image, dtype)
             if in_place:
                 return self.update(image)
             # cast image
         elif image_type == 'itk':
             image = self.itk_image
-            if type(dtype).__module__ == np.__name__:
-                if dtype not in DTYPE_MATCH_ITK:
-                    raise ValueError("Unknown dtype: {}".format(dtype))
+            if dtype in DTYPE_MATCH_ITK:
                 dtype = DTYPE_MATCH_ITK[dtype]
+            elif dtype in DTYPE_STRING:
+                dtype = DTYPE_STRING[dtype][0]
+            else:
+                raise ValueError("Unknown dtype: {}".format(dtype))
             dim = image.GetImageDimension()
             caster = itk.CastImageFilter[type(image), itk.Image[dtype, dim]]
             caster.SetInput(image)
@@ -294,6 +309,36 @@ class SmartImage(object):
             return np.array(image.GetDirection())
         elif isinstance(image, itk.Image):
             return itk.GetArrayFromMatrix(image.GetDirection()).flatten()
+
+    def SetDirection(self, direction):
+        image = self.image
+        if isinstance(image, sitk.Image):
+            if isinstance(direction, (tuple, list)) or (isinstance(direction, np.ndarray) and direction.ndim == 1):
+                pass  # assume from another sitk.Image or SmartImage
+            elif isinstance(direction, np.ndarray):
+                direction = direction.flatten()
+            elif isinstance(direction, itk.Matrix):
+                direction = itk.GetArrayFromMatrix(direction).flatten()
+            else:
+                raise TypeError('Unknown direction type: {}'.format(type(direction)))
+            self.__sitk_image.SetDirection(direction)
+            self.__updated_sitk = True
+        elif isinstance(image, itk.Image):
+            if isinstance(direction, (tuple, list)) or (isinstance(direction, np.ndarray) and direction.ndim == 1):
+                direction = np.reshape(np.array(direction), [self.ndim] * 2)
+                direction = itk.GetMatrixFromArray(direction)
+            elif isinstance(direction, itk.Matrix):
+                pass
+            elif isinstance(direction, np.ndarray):
+                direction = np.squeeze(direction)
+                if direction.ndim != 2:
+                    raise ValueError('Direction matrices must be 1- or 2d.')
+                direction = itk.GetMatrixFromArray(direction)
+            else:
+                raise TypeError('Unknown direction type: {}'.format(type(direction)))
+            self.__itk_image.SetDirection(direction)
+            self.__updated_itk = True
+        self.__reset_internals(direction_only=True)
 
     def GetDirectionMatrix(self):
         image = self.image
@@ -387,7 +432,53 @@ class SmartImage(object):
             image = self.as_array()
             np.save(dest_path, image)
 
-    # TODO - add resample_to_ref
+    def window(self, min=None, max=None, level=None, width=None, in_place=False):
+        """Clip the intensity values of the image using either min/max or level/width
+
+        Parameters
+        ----------
+        min : int or float, optional
+            Minimum value of the window, by default None
+        max : int or float, optional
+            Maximum value of the window, by default None
+        level : int or float, optional
+            Center of the window, by default None
+        width : int or float, optional
+            Width of the window, by default None
+        in_place : bool, optional
+            Whether to update the image object or return a new image, by default False
+
+        Returns
+        -------
+        SmartImage
+            The result image with windowed intensity values
+        """
+        if min is not None and max is not None:
+            pass
+        elif level is not None and width is not None:
+            min = level - (width / 2)
+            max = level + (width / 2)
+        else:
+            raise ValueError('Either min/max or level/width must be set for windowing')
+        
+        image = self.image
+        if isinstance(image, sitk.Image):
+            result = sitk.IntensityWindowing(image, windowMinimum=min, windowMaximum=max, outputMinimum=min, outputMaximum=max)
+        elif isinstance(image, itk.Image):
+            filter = itk.IntensityWindowingImageFilter.New(image)
+            filter.SetInput(image)
+            filter.SetOutputMaximum(max)
+            filter.SetOutputMinimum(min)
+            filter.SetWindowMaximum(max)
+            filter.SetWindowMinimum(min)
+            filter.Update()
+            result = filter.GetOutput()
+
+        if in_place:
+            self.update(result)
+            return result
+        return SmartImage(result)
+
     def resample(self,
                  size: Union[int, List[int], None, np.ndarray] = None,
                  origin: Union[List[float], None, np.ndarray] = None,
@@ -466,7 +557,7 @@ class SmartImage(object):
 
     def resample_to_ref(self, ref, interp='auto', outside_val=None, in_place=False):
         if interp == 'auto':
-            if self.min() == 0 and self.max() < 255 and 'f' not in str(self.dtype):
+            if self.min() >= 0 and self.max() < 255 and 'f' not in str(self.dtype):
                 #  This should be a label
                 interp = sitk.sitkNearestNeighbor
             else:  
@@ -478,6 +569,8 @@ class SmartImage(object):
         resampleFilter = sitk.ResampleImageFilter()
         resampleFilter.SetInterpolator(interp)
         resampleFilter.SetDefaultPixelValue(outside_val)
+        if isinstance(ref, SmartImage) and not ref.loaded:
+            ref = ref.path
         if isinstance(ref, SmartImage):
             resampleFilter.SetReferenceImage(ref.sitk_image)
         elif isinstance(ref, sitk.Image):
