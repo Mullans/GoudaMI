@@ -1,3 +1,4 @@
+import os
 import urllib
 
 import gouda
@@ -87,15 +88,37 @@ def perform_registration_from_parameters(fixed_image,
     return result_image, elastix_filter.GetTransformParameterMap()[0]
 
 
-def perform_transformation(moving_image, parameters, is_segmentation=False, return_deformation_field=False, log_to_console=True):
-    if isinstance(parameters, str):
-        parameters = sitk.ReadParameterFile(parameters)
-    if is_segmentation:
-        parameters['FinalBSplineInterpolationOrder'] = '0'
-        parameters['DefaultPixelValue'] = '0'
-    if isinstance(moving_image, SmartImage):
-        moving_image = moving_image.sitk_image
+TRANSFORM_INTERPOLATORS = {
+    'linear': 'FinalLinearInterpolator',
+    'nearestneighbor': 'FinalNearestNeighborInterpolator'
+}
 
+
+def perform_transformation(moving_image, parameters, is_segmentation=False, return_deformation_field=False, log_to_console=True, interp=None, outside_val=None):
+    if isinstance(parameters, (str, os.PathLike)):
+        parameters = sitk.ReadParameterFile(str(parameters))
+    if isinstance(moving_image, SmartImage):
+        if outside_val is None:
+            outside_val = moving_image.min()
+        moving_image = moving_image.sitk_image
+    if outside_val is None:
+            filt = sitk.MinimumMaximumImageFilter()
+            filt.Execute(moving_image)
+            outside_val = float(filt.GetMinimum())
+    
+    if interp is not None:
+        if interp in TRANSFORM_INTERPOLATORS:
+            interp = TRANSFORM_INTERPOLATORS[interp]
+        elif 'bspline' in interp:
+            interp, interp_order = interp.split('_')
+            interp = 'FinalBSplineInterpolator'
+            parameters['FinalBSplineInterpolationOrder'] = interp_order
+        parameters['ResampleInterpolator'] = [interp]
+
+    parameters['DefaultPixelValue'] = [str(outside_val)]
+    # if is_segmentation:
+    #     parameters['FinalBSplineInterpolationOrder'] = '0'
+            
     trans_filter = sitk.TransformixImageFilter()
     trans_filter.SetMovingImage(moving_image)
     trans_filter.SetTransformParameterMap(parameters)

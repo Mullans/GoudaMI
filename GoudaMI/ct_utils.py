@@ -99,9 +99,9 @@ def clip_image(image, low=MIN_INTENSITY, high=MAX_INTENSITY):
     NOTE: UI-Lung values: [-1024, 1024], NVidia Lung Values [-1000, 500]"""
     if isinstance(image, SmartImage):
         image = image.sitk_image
-    image = sitk.Threshold(image, -32768, high, high)
-    image = sitk.Threshold(image, low, high, low)
-    # sitk.IntensityWindowing(image, -1000, 500, -1000, 500)
+    # image = sitk.Threshold(image, -32768, high, high)
+    # image = sitk.Threshold(image, low, high, low)
+    return sitk.IntensityWindowing(image, low, high, low, high)
     return image
 
 
