@@ -1,9 +1,11 @@
-from collections.abc import Iterable
 import glob
 import os
 import warnings
+from collections.abc import Iterable
 
+import cv2
 import gouda
+
 try:
     import itk
 except ImportError:
@@ -1253,3 +1255,32 @@ def remove_small_items(label_img, min_size=20):
         changes[label] = 0 if lfilter.GetNumberOfPixels(label) < min_size else 1
     result = sitk.ChangeLabel(components, changeMap=changes)
     return result
+
+
+def get_total_hull(arr):
+    """Get a convex hull encompasing all foreground of a 2d label"""
+    result = np.zeros_like(arr)
+    if arr.sum() == 0:
+        return result
+    contours, hierarchy = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    full_hull = cv2.convexHull(np.concatenate(contours, axis=0), False)
+    cv2.drawContours(result, [full_hull], -1, 1, -1)
+    return result
+
+
+def get_label_hull(label):
+    """Get the convex hull of each slice of a label image"""
+    if isinstance(label, SmartImage):
+        label = label.sitk_image
+    elif isinstance(label, sitk.Image):
+        pass
+    else:
+        raise NotImplementedError('Not implemented for type `{}` yet'.format(type(label)))
+
+    arr = sitk.GetArrayViewFromImage(label)
+    result = np.zeros_like(arr)
+    for slice_idx in range(arr.shape[0]):
+        result[slice_idx] = get_total_hull(arr[slice_idx])
+    result_img = sitk.GetImageFromArray(result)
+    result_img.CopyInformation(label)
+    return result_img    
