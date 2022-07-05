@@ -7,6 +7,7 @@ import SimpleITK as sitk
 import vtk
 
 from .smart_image import SmartImage
+#TODO - create wrap4XXX for itk, sitk, and vtk to take any format, convert to chosen, and return as original format
 
 
 def wrap4itk(func):
@@ -14,6 +15,7 @@ def wrap4itk(func):
     @wraps(func)
     def wrapped_func(image, *args, **kwargs):
         input_type = ''
+        input_direction = image.GetDirection()
         if isinstance(image, SmartImage):
             input_type = 'Smart,' + image.default_type
             image = image.itk_image
@@ -43,11 +45,14 @@ def wrap4itk(func):
         #FIXME - result may have different direction from input image
         if input_type.startswith('Smart'):
             _, default_type = input_type.split(',')
-            return SmartImage(result, default_type=default_type)
+            result = SmartImage(result, default_type=default_type)
         elif input_type == 'sitk':
-            return itk2sitk(result)
+            result = itk2sitk(result)
         else:
-            return result
+            # Should be input_type == 'itk'
+            pass
+        result.SetDirection(input_direction)
+        return result
     return wrapped_func
 
 
