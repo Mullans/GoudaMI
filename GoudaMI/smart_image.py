@@ -22,6 +22,9 @@ except ImportError:
             self.AndImageFilter = None
             self.OrImageFilter = None
             self.AddImageFilter = None
+            
+        def imread(self, *args, **kwargs):
+            raise ImportError('itk cannot be imported, so itk methods cannot be used')
         
         def __getattr__(self, attr):
             warnings.warn('itk cannot be imported, so itk methods cannot be used', ImportWarning, stacklevel=2)
@@ -308,7 +311,7 @@ class SmartImage(object):
         else:
             raise ValueError("This should never reach here")
 
-    def astype(self, dtype, in_place=False, image_type=None):
+    def astype(self, dtype, in_place=False, image_type=None, return_smart_image=True):
         image_type = self.default_type if image_type is None else image_type
         if image_type == 'sitk':
             image = self.sitk_image
@@ -339,6 +342,8 @@ class SmartImage(object):
                 return self.update(image)
         else:
             raise ValueError('Unknown image type: {}'.format(image_type))
+        if return_smart_image:
+            return SmartImage(image)
         return image
 
     def GetDirection(self):
