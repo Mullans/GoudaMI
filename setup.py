@@ -1,6 +1,6 @@
 import setuptools
 
-VERSION = "0.0.1"
+VERSION = "0.0.2"
 with open("requirements.txt") as reqf:
     required = reqf.read().splitlines()
     

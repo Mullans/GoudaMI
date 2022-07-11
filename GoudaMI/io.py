@@ -2,7 +2,9 @@ import glob
 import os
 import warnings
 
-from .smart_image import SmartImage
+import numpy as np
+
+from .smart_image import SmartImage, get_image_type
 
 
 # def write_vtk(data, output_path, output_version=42):
@@ -112,17 +114,18 @@ def write_image(data, path, label=None, skip_existing_filenames=False):
         The data to save
     path : str
     """
-    import itk
-    import numpy as np
-    import SimpleITK as sitk
-
-    if isinstance(data, sitk.Image):
+    image_type = get_image_type(data)
+    if image_type == 'sitk':
+        import SimpleITK as sitk
+    # if isinstance(data, sitk.Image):
         if path.endswith('.npy'):
             data = sitk.GetArrayViewFromImage(data)
             np.save(path, data)
         else:
             sitk.WriteImage(data, path)
-    elif isinstance(data, itk.Image):
+    elif image_type == 'itk':
+    # elif isinstance(data, itk.Image):
+        import itk
         if path.endswith('.npy'):
             data = itk.GetArrayViewFromImage(data)
             np.save(path, data)
@@ -132,6 +135,7 @@ def write_image(data, path, label=None, skip_existing_filenames=False):
         if path.endswith('.npy'):
             np.save(path, data)
         elif path.endswith('.nii') or path.endswith('.nii.gz'):
+            import SimpleITK as sitk
             data = sitk.GetImageFromArray(data)
             sitk.WriteImage(data, path)
     else:
@@ -149,7 +153,6 @@ def parse_color(color, float_cmap='viridis', int_cmap='Set1'):
     TODO: DELETE ME WHEN ADDED TO GOUDA LIVE VERSION
     """
     import matplotlib
-    import numpy as np
     try:
         return matplotlib.colors.to_rgb(color)
     except ValueError:

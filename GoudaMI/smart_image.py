@@ -1,31 +1,50 @@
 import glob
+import importlib
 import os
 import warnings
 from typing import List, Optional, Union
 
 import gouda
-import itk
 import numpy as np
 import SimpleITK as sitk
 
 from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_SITK, DTYPE_STRING
 
-# DTYPE_MATCH_ITK = {
-#     np.float32: itk.F,
-#     np.float64: itk.D,
-#     np.uint8: itk.UC,
-#     np.int16: itk.SS,
-#     np.uint16: itk.US,
-# }
-#
-# DTYPE_MATCH_SITK = {
-#     np.float32: sitk.sitkFloat32,
-#     np.float64: sitk.sitkFloat64,
-#     np.uint8: sitk.sitkUInt8,
-#     np.int16: sitk.sitkInt16,
-#     np.uint16: sitk.sitkUInt16,
-# }
+try:
+    import itk
+    ITK_AVAILABLE = True
+except ImportError:
+    class DummyModule:
+        #TODO: Come up with a better way to handle missing itk
+        def __init__(self):
+            self.Image = None
+            self.SubtractImageFilter = None
+            self.AndImageFilter = None
+            self.OrImageFilter = None
+            self.AddImageFilter = None
+        
+        def __getattr__(self, attr):
+            warnings.warn('itk cannot be imported, so itk methods cannot be used', ImportWarning, stacklevel=2)
+        
+    itk = DummyModule()
+    ITK_AVAILABLE = False
 
+def get_image_type(image):
+    """Convenience method to get object type without imports"""
+    type_str = str(type(image))
+    if 'itk.itkImage' in type_str:
+        return 'itk'
+    elif 'SimpleITK.Image' in type_str:
+        return 'sitk'
+    elif 'NDArrayITKBase' in type_str or 'ndarray' in type_str:
+        return 'numpy'
+    elif 'SmartImage' in type_str:
+        return 'smartimage'
+    elif 'vtkPolyData' in type_str:
+        return 'vtk_polydata'
+    else:
+        return None
+    
 
 def _search_for_dicom(base_dir):
     # TODO - replicated from io to prevent cycle - add to GOUDA
@@ -41,12 +60,35 @@ def _search_for_dicom(base_dir):
     return possible
 
 
+def sitk2itk(image):
+    """Local version of the method in convert to avoid circular imports"""
+    if isinstance(image, itk.Image):
+        return image
+    itk_image = itk.GetImageFromArray(sitk.GetArrayViewFromImage(image), is_vector=image.GetNumberOfComponentsPerPixel() > 1)
+    itk_image.SetOrigin(image.GetOrigin())
+    itk_image.SetSpacing(image.GetSpacing())
+    itk_image.SetDirection(itk.GetMatrixFromArray(np.reshape(np.array(image.GetDirection()), [image.GetDimension()] * 2)))
+    return itk_image
+
+
+def itk2sitk(image):
+    """Local version of the method in convert to avoid circular imports"""
+    if isinstance(image, sitk.Image):
+        return image
+    sitk_image = sitk.GetImageFromArray(itk.GetArrayViewFromImage(image), isVector=image.GetNumberOfComponentsPerPixel() > 1)
+    sitk_image.SetOrigin(tuple(image.GetOrigin()))
+    sitk_image.SetSpacing(tuple(image.GetSpacing()))
+    sitk_image.SetDirection(itk.GetArrayFromMatrix(image.GetDirection()).flatten())
+    return sitk_image
+
+
 class SmartImage(object):
     def __init__(self, path, default_type='sitk'):
         self.__sitk_image: sitk.Image = None
         self.__itk_image: itk.Image = None
         self.__updated_itk: bool = False
         self.__updated_sitk: bool = False
+        self.__image_type: str = None
         # These are calculated only as needed
         self.__reset_internals()
 
@@ -54,17 +96,21 @@ class SmartImage(object):
         if hasattr(path, 'abspath'):
             path = path.abspath
         if not isinstance(path, (str, os.PathLike)):
-            if isinstance(path, itk.Image):
+            input_type = get_image_type(path)
+            if input_type == 'itk':
+            # if isinstance(path, itk.Image):
                 self.__itk_image = path
                 self.__sitk_image = None
                 self.__updated_itk = True
                 self.path = ""
-            elif isinstance(path, sitk.Image):
+            elif input_type == 'sitk':
+            # elif isinstance(path, sitk.Image):
                 self.__sitk_image = path
                 self.__itk_image = None
                 self.__updated_sitk = True
                 self.path = ""
-            elif isinstance(path, SmartImage):
+            elif input_type == 'smartimage':
+            # elif isinstance(path, SmartImage):
                 # NOTE: This is just a shallow copy of the other SmartImage for convenience
                 self.default_type = path.default_type
                 self.__sitk_image = path.__sitk_image
@@ -72,7 +118,8 @@ class SmartImage(object):
                 self.__updated_itk = path.__updated_itk
                 self.__updated_sitk = path.__updated_sitk
                 self.path = path.path
-            elif isinstance(path, np.ndarray):
+            elif input_type == 'numpy':
+            # elif isinstance(path, np.ndarray):
                 if path.ndim != 3:
                     raise ValueError("SmartImage can only be initialized with volumes for now")
                 if path.dtype == bool:
@@ -111,7 +158,7 @@ class SmartImage(object):
         
     def __run_image_stats(self):
         image = self.image
-        if isinstance(image, sitk.Image):
+        if self.image_type == 'sitk':
             filt = sitk.StatisticsImageFilter()
             filt.Execute(image)
             self.__maximum_intensity = filt.GetMaximum()
@@ -120,7 +167,7 @@ class SmartImage(object):
             self.__sum_intensity = filt.GetSum()
             self.__stddev_intensity = filt.GetSigma()
             self.__var_intensity = filt.GetVariance()
-        elif isinstance(image, itk.Image):
+        elif self.image_type == 'itk':
             raise NotImplementedError('ITK backed stats are yet-to-come')
 
     def min(self):
@@ -156,35 +203,46 @@ class SmartImage(object):
     @property
     def dtype(self):
         image = self.image
-        if isinstance(image, itk.Image):
+        if self.image_type == 'itk':
             # return type(image)  # returns the python type?
             return itk.template(image)[1][0]  # returns the C-type
-        elif isinstance(image, sitk.Image):
+        elif self.image_type == 'sitk':
             return image.GetPixelIDTypeAsString()
+    
+    @property
+    def image_type(self):
+        if self.__image_type is None:
+            self.image
+        return self.__image_type
 
     @property
     def image(self):
-        if self.__sitk_image is None and self.__itk_image is None:
+        if self.__sitk_image is None and self.__itk_image is None:  
+            # neither type is loaded
             if self.default_type == 'sitk':
-                return self.sitk_image
+                return_img = self.sitk_image
             elif self.default_type == 'itk':
-                return self.itk_image
+                return_img = self.itk_image
             else:
                 raise ValueError("Unknown default image type: {}".format(self.default_type))
-        if (self.__sitk_image is None or self.__updated_itk) != (self.__itk_image is None or self.__updated_sitk):
-            return self.__sitk_image if self.__sitk_image is not None else self.__itk_image
+        elif (self.__sitk_image is None or self.__updated_itk) != (self.__itk_image is None or self.__updated_sitk):
+            # return the most updated and loaded type
+            return_img = self.__sitk_image if self.__sitk_image is not None else self.__itk_image
         elif self.default_type == 'sitk':
-            return self.sitk_image
+            return_img = self.sitk_image
         elif self.default_type == 'itk':
-            return self.itk_image
+            return_img = self.itk_image
         else:
             raise ValueError("No possible images to return...")
+        
+        self.__image_type = get_image_type(return_img)
+        return return_img
 
     @property
     def itk_image(self):
         if self.__updated_sitk:
             self.__reset_internals()
-            self.__itk_image = self.__sitk2itk(self.sitk_image)
+            self.__itk_image = sitk2itk(self.sitk_image)
             self.__updated_sitk = False
         if self.__itk_image is None:
             self.__itk_image = itk.imread(str(self.path))
@@ -194,7 +252,7 @@ class SmartImage(object):
     def sitk_image(self):
         if self.__updated_itk:
             self.__reset_internals()
-            self.__sitk_image = self.__itk2sitk(self.itk_image)
+            self.__sitk_image = itk2sitk(self.itk_image)
             self.__updated_itk = False
         if self.__sitk_image is None:
             if os.path.isdir(self.path):
@@ -224,48 +282,28 @@ class SmartImage(object):
     def loaded(self):
         return self.__sitk_image is None and self.__itk_image is None
 
-    def __sitk2itk(self, image):
-        """Local version of the method in convert to avoid circular imports"""
-        if isinstance(image, itk.Image):
-            return image
-        itk_image = itk.GetImageFromArray(sitk.GetArrayViewFromImage(image), is_vector=image.GetNumberOfComponentsPerPixel() > 1)
-        itk_image.SetOrigin(image.GetOrigin())
-        itk_image.SetSpacing(image.GetSpacing())
-        itk_image.SetDirection(itk.GetMatrixFromArray(np.reshape(np.array(image.GetDirection()), [image.GetDimension()] * 2)))
-        return itk_image
-
-    def __itk2sitk(self, image):
-        """Local version of the method in convert to avoid circular imports"""
-        if isinstance(image, sitk.Image):
-            return image
-        sitk_image = sitk.GetImageFromArray(itk.GetArrayViewFromImage(image), isVector=image.GetNumberOfComponentsPerPixel() > 1)
-        sitk_image.SetOrigin(tuple(image.GetOrigin()))
-        sitk_image.SetSpacing(tuple(image.GetSpacing()))
-        sitk_image.SetDirection(itk.GetArrayFromMatrix(image.GetDirection()).flatten())
-        return sitk_image
-
     @property
     def ndim(self):
         image = self.image
-        if isinstance(image, sitk.Image):
+        if self.image_type == 'sitk':
             return image.GetDimension()
-        elif isinstance(image, itk.Image):
+        elif self.image_type == 'itk':
             return image.GetImageDimension()
 
     def as_array(self):
         image = self.image
-        if isinstance(image, itk.Image):
+        if self.image_type == 'itk':
             return itk.GetArrayFromImage(image)
-        elif isinstance(image, sitk.Image):
+        elif self.image_type == 'sitk':
             return sitk.GetArrayFromImage(image)
         else:
             raise ValueError("This should never reach here")
 
     def as_view(self):
         image = self.image
-        if isinstance(image, itk.Image):
+        if self.image_type == 'itk':
             return itk.GetArrayViewFromImage(image)
-        elif isinstance(image, sitk.Image):
+        elif self.image_type == 'sitk':
             return sitk.GetArrayViewFromImage(image)
         else:
             raise ValueError("This should never reach here")
@@ -305,14 +343,14 @@ class SmartImage(object):
 
     def GetDirection(self):
         image = self.image
-        if isinstance(image, sitk.Image):
+        if self.image_type == 'sitk':
             return np.array(image.GetDirection())
-        elif isinstance(image, itk.Image):
+        elif self.image_type == 'itk':
             return itk.GetArrayFromMatrix(image.GetDirection()).flatten()
 
     def SetDirection(self, direction):
         image = self.image
-        if isinstance(image, sitk.Image):
+        if self.image_type == 'sitk':
             if isinstance(direction, (tuple, list)) or (isinstance(direction, np.ndarray) and direction.ndim == 1):
                 pass  # assume from another sitk.Image or SmartImage
             elif isinstance(direction, np.ndarray):
@@ -323,7 +361,7 @@ class SmartImage(object):
                 raise TypeError('Unknown direction type: {}'.format(type(direction)))
             self.__sitk_image.SetDirection(direction)
             self.__updated_sitk = True
-        elif isinstance(image, itk.Image):
+        elif self.image_type == 'itk':
             if isinstance(direction, (tuple, list)) or (isinstance(direction, np.ndarray) and direction.ndim == 1):
                 direction = np.reshape(np.array(direction), [self.ndim] * 2)
                 direction = itk.GetMatrixFromArray(direction)
@@ -342,11 +380,11 @@ class SmartImage(object):
 
     def GetDirectionMatrix(self):
         image = self.image
-        if isinstance(image, sitk.Image):
+        if self.image_type == 'sitk':
             direction = np.array(image.GetDirection())
             nrows = int(np.sqrt(direction.shape[0]))
             return direction.reshape([nrows, -1])
-        elif isinstance(image, itk.Image):
+        elif self.image_type == 'itk':
             return itk.GetArrayFromMatrix(image.GetDirection())
 
     def get_physical_properties(self):
@@ -363,9 +401,9 @@ class SmartImage(object):
 
     def GetSize(self):
         image = self.image
-        if isinstance(image, sitk.Image):
+        if self.image_type == 'sitk':
             return np.array(image.GetSize())
-        elif isinstance(image, itk.Image):
+        elif self.image_type == 'itk':
             return np.array(image.GetLargestPossibleRegion().GetSize())
 
     def GetSpacing(self):
@@ -389,9 +427,9 @@ class SmartImage(object):
             image.SetDirection(ref_image.GetDirection())
             image.SetSpacing(ref_image.GetSpacing())
 
-        if isinstance(image, sitk.Image):
+        if self.image_type == 'sitk':
             self.__updated_sitk = True
-        elif isinstance(image, itk.Image):
+        elif self.image_type == 'itk':
             self.__updated_itk = True
         else:
             raise ValueError('Should never be here')
@@ -407,12 +445,15 @@ class SmartImage(object):
         return self.labels
 
     def update(self, image):
-        if isinstance(image, sitk.Image):
+        image_type = get_image_type(image)
+        if image_type == 'sitk':
             self.__sitk_image = image
             self.__updated_sitk = True
-        elif isinstance(image, itk.Image):
+        elif image_type == 'itk':
             self.__itk_image = image
             self.__updated_itk = True
+        else:
+            raise TypeError('SmartImage must be updated with either itk.Image or SimpleITK.Image objects')
         self.__reset_internals()
         return self
 
@@ -462,9 +503,9 @@ class SmartImage(object):
             raise ValueError('Either min/max or level/width must be set for windowing')
         
         image = self.image
-        if isinstance(image, sitk.Image):
+        if self.image_type == 'sitk':
             result = sitk.IntensityWindowing(image, windowMinimum=min, windowMaximum=max, outputMinimum=min, outputMaximum=max)
-        elif isinstance(image, itk.Image):
+        elif self.image_type == 'itk':
             filter = itk.IntensityWindowingImageFilter.New(image)
             filter.SetInput(image)
             filter.SetOutputMaximum(max)
@@ -623,44 +664,44 @@ class SmartImage(object):
 
     def __eq__(self, other):
         image = self.image
-        if isinstance(image, sitk.Image):
+        if self.image_type == 'sitk':
             if isinstance(other, SmartImage):  # unwrap other as-needed
                 other = other.sitk_image
             return SmartImage(image.__eq__(other))
-        elif isinstance(image, itk.Image):
+        elif self.image_type == 'itk':
             raise ValueError("Comparison operators are not supported yet for itk")
         else:
             raise ValueError('self.image is type {}'.format(type(image)))
 
     def __gt__(self, other):
         image = self.image
-        if isinstance(image, sitk.Image):
+        if self.image_type == 'sitk':
             if isinstance(other, SmartImage):  # unwrap other as-needed
                 other = other.sitk_image
             return SmartImage(image.__gt__(other))
-        elif isinstance(image, itk.Image):
+        elif self.image_type == 'itk':
             raise ValueError("Comparison operators are not supported yet for itk")
         else:
             raise ValueError('self.image is type {}'.format(type(image)))
 
     def __lt__(self, other):
         image = self.image
-        if isinstance(image, sitk.Image):
+        if self.image_type == 'sitk': 
             if isinstance(other, SmartImage):  # unwrap other as-needed
                 other = other.sitk_image
             return SmartImage(image.__lt__(other.sitk_image))
-        elif isinstance(image, itk.Image):
+        elif self.image_type == 'itk':
             raise ValueError("Comparison operators are not supported yet for itk")
         else:
             raise ValueError('self.image is type {}'.format(type(image)))
 
     def __ne__(self, other):
         image = self.image
-        if isinstance(image, sitk.Image):
+        if self.image_type == 'sitk':
             if isinstance(other, SmartImage):  # unwrap other as-needed
                 other = other.sitk_image
             return SmartImage(image.__ne__(other.sitk_image))
-        elif isinstance(image, itk.Image):
+        elif self.image_type == 'itk':
             raise ValueError("Comparison operators are not supported yet for itk")
         else:
             raise ValueError('self.image is type {}'.format(type(image)))
@@ -695,14 +736,14 @@ class SmartImage(object):
         All operations are assumed to have the forms `sitk.Operation(self.image, target)` or `itk.Operation(self.image, target)`
         """
         image = self.image
-        if isinstance(image, sitk.Image):
+        if self.image_type == 'sitk':
             if isinstance(target, SmartImage):
                 target = target.sitk_image
             result = sitk_op(image, target)
             if isinstance(result, sitk.Image) and not in_place:
                 result = SmartImage(result)
             return result
-        elif isinstance(image, itk.Image):
+        elif self.image_type == 'itk':
             if isinstance(target, SmartImage):
                 target = target.itk_image
             result = itk_op(image, target)
@@ -714,9 +755,7 @@ class SmartImage(object):
 
     def __getitem__(self, key):
         image = self.image
-        if isinstance(image, sitk.Image):
-            return SmartImage(image[key])
-        elif isinstance(image, itk.Image):
+        if self.image_type == 'sitk' or self.image_type == 'itk':
             return SmartImage(image[key])
         else:
             # Should never throw this error

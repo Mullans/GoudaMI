@@ -3,18 +3,17 @@ import os
 import warnings
 from collections.abc import Iterable
 
-import cv2
 import gouda
 
 try:
     import itk
 except ImportError:
-    warnings.warn("Could not import ITK module - some methods may not work")
+    pass  # moved warning to __init__.py
+    # warnings.warn("Could not import ITK module - some methods may not work")
+    
 import numpy as np
 import scipy.ndimage
 import SimpleITK as sitk
-import skimage.measure
-import skimage.morphology
 
 from . import io
 from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_SITK
@@ -171,6 +170,7 @@ def fill2d(arr, force_slices=False):
 
 
 def fill_slices(arr, dilate=0, erode=0, axis=0):
+    import skimage.morphology
     src_img = None
     if isinstance(arr, (sitk.Image, SmartImage)):
         src_img = arr
@@ -342,6 +342,7 @@ def crop_image_to_mask(image, mask=None, crop_z=False, crop_quantile=50, return_
 
 
 def clean_segmentation(lung_image, lung_threshold=0.1, body_mask=None):
+    import skimage.measure
     if isinstance(lung_image, sitk.Image):
         source_arr = sitk.GetArrayFromImage(lung_image)
     else:
@@ -1259,6 +1260,7 @@ def remove_small_items(label_img, min_size=20):
 
 def get_total_hull(arr):
     """Get a convex hull encompasing all foreground of a 2d label"""
+    import cv2
     result = np.zeros_like(arr)
     if arr.sum() == 0:
         return result
