@@ -56,6 +56,40 @@ def wrap4itk(func):
     return wrapped_func
 
 
+def wrap4numpy(func):
+    """Wrap a method that takes a numpy.ndarray and returns a numpy.ndarray"""
+    @wraps(func)
+    def wrapped_func(image, *args, **kwargs):
+        return_type = ''
+        if isinstance(image, SmartImage):
+            image = image.image
+            return_type = 'smart'
+        if isinstance(image, sitk.Image):
+            arr = sitk.GetArrayViewFromImage(image)
+            return_type += 'sitk'
+        elif isinstance(image, itk.Image):
+            arr = itk.GetArrayViewFromImage(image)
+            return_type += 'itk'
+        else:
+            raise ValueError('Unknown image type: {}'.format(type(image)))
+        
+        arr = func(arr, *args, **kwargs)
+        
+        if return_type.endswith('sitk'):
+            return_image = sitk.GetImageFromArray(arr)
+            return_image.CopyInformation(image)
+        elif return_type.endswith('itk'):
+            return_image = itk.GetImageFromArray(arr)
+            return_image.SetOrigin(image.GetOrigin())
+            return_image.SetDirection(image.GetDirection())
+            return_image.SetSpacing(image.GetSpacing())
+        if return_type.startswith('smart'):
+            return_image = SmartImage(return_image, default_type=return_type[5:])
+            
+        return return_image
+    return wrapped_func
+
+
 def sitk2vtk(sitk_pointer, nb_points=None):
     import vtk.util.numpy_support
     numpy_array = sitk.GetArrayFromImage(sitk_pointer)

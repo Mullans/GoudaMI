@@ -18,6 +18,7 @@ import SimpleITK as sitk
 from . import io
 from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_SITK
 from .smart_image import SmartImage
+from .convert import wrap4numpy
 
 MAX_INTENSITY = 500
 MIN_INTENSITY = -1000
@@ -127,6 +128,17 @@ def quick_open(img, radius=3):
     opener.SetForegroundValue(1)
     opener.SetBackgroundValue(0)
     return opener.Execute(img)
+
+
+def quick_close(img, radius=3):
+    """Shortcut method for applying the sitk BinaryMorphologicalClosingImageFilter"""
+    if isinstance(img, np.ndarray):
+        img = sitk.GetImageFromArray(img)
+    closer = sitk.BinaryMorphologicalClosingImageFilter()
+    closer.SetKernelType(sitk.sitkBall)
+    closer.SetKernelRadius(radius)
+    closer.SetForegroundValue(1)
+    return closer.Execute(img)
 
 
 def quick_dilate(img, radius=3):
@@ -1286,3 +1298,8 @@ def get_label_hull(label):
     result_img = sitk.GetImageFromArray(result)
     result_img.CopyInformation(label)
     return result_img    
+
+
+@wrap4numpy
+def argmax(image, axis=-1, return_type=np.uint8):
+    return image.argmax(axis=axis).astype(return_type)
