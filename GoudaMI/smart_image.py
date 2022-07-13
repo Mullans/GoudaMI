@@ -193,6 +193,12 @@ class SmartImage(object):
             self.__run_image_stats()
         return self.__sum_intensity
     
+    def volume(self):
+        if self.__sum_intensity is None:
+            self.__run_image_stats()
+        pixel_volume = np.prod(self.GetSpacing())
+        return self.sum() * pixel_volume
+    
     def stddev(self):
         if self.__stddev_intensity is None:
             self.__run_image_stats()
@@ -202,7 +208,7 @@ class SmartImage(object):
         if self.__var_intensity is None:
             self.__run_image_stats()
         return self.__var_intensity
-
+    
     @property
     def dtype(self):
         image = self.image
@@ -461,7 +467,21 @@ class SmartImage(object):
             raise TypeError('SmartImage must be updated with either itk.Image or SimpleITK.Image objects')
         self.__reset_internals()
         return self
-
+    
+    def sitk_op(self, op, *args, in_place=True, **kwargs):
+        result = op(self.sitk_image, *args, **kwargs)
+        if in_place:
+            return self.update(result)
+        else:
+            return SmartImage(result)
+        
+    def itk_op(self, op, *args, in_place=True, **kwargs):
+        result = op(self.itk_image, *args, **kwargs)
+        if in_place:
+            return self.update(result)
+        else:
+            return SmartImage(result)
+        
     def write(self, dest_path, image_type=None, compression=0):
         image_type = self.default_type if image_type is None else image_type
         dest_path = str(dest_path)
