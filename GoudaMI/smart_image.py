@@ -451,6 +451,11 @@ class SmartImage(object):
     def unique(self):
         if self.__unique_labels is None:
             label_filt = sitk.LabelShapeStatisticsImageFilter()
+            if self.__minimum_intensity is not None:
+                label_filt.SetBackgroundValue(self.__minimum_intensity - 1)
+            else:
+                label_filt.SetBackgroundValue(-1)  # -1000 makes it lose labels sometimes?
+            label_filt.SetComputePerimeter(False)
             label_filt.Execute(self.sitk_image)
             self.labels = label_filt.GetLabels()
         return self.labels
@@ -719,6 +724,12 @@ class SmartImage(object):
             raise ValueError("Comparison operators are not supported yet for itk")
         else:
             raise ValueError('self.image is type {}'.format(type(image)))
+    
+    def __mul__(self, other):
+        return self.__perform_op(sitk.Multiply, itk.MultiplyImageFilter, other, in_place=False)
+    
+    # def __rmul__(self, other):
+        # This would be [other * self] rather than [self * other] - do we want this?
 
     def __ne__(self, other):
         image = self.image

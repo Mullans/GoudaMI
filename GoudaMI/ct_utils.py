@@ -2,6 +2,7 @@ import glob
 import os
 import warnings
 from collections.abc import Iterable
+from typing import Optional
 
 import gouda
 
@@ -16,7 +17,7 @@ import scipy.ndimage
 import SimpleITK as sitk
 
 from . import io
-from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_SITK
+from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_SITK, DTYPE_STRING
 from .smart_image import SmartImage
 from .convert import wrap4numpy
 
@@ -444,6 +445,43 @@ def resample_to_ref(im, ref, outside_val=0, interp=sitk.sitkNearestNeighbor):
         raise ValueError("Unknown reference type: '{}'".format(type(ref)))
     resampleIm = resampleFilter.Execute(im)
     return resampleIm
+
+
+def resample_separate_z(image, target_spacing, slice_interp=sitk.sitkBSpline, z_interp=sitk.sitkNearestNeighbor):
+    """Resample an image to a target spacing, but use different z-interpolation"""
+    if slice_interp < 2:
+        slice_interp += 1
+    if z_interp < 2:
+        z_interp += 1
+    # Some applications have 0=NN, 1=Linear, but sitk has 1=NN and 2=Linear
+    new_shape = np.round((np.float32(image.GetSpacing()) / np.float32(target_spacing)) * np.float32(image.GetSize())).astype(int)
+    
+    slice_spacing = target_spacing[:2]
+    slice_shape = new_shape[:2]
+    resampler = sitk.ResampleImageFilter()
+    resampler.SetInterpolator(slice_interp)
+    resampler.SetDefaultPixelValue(-1000)
+    resampler.SetOutputSpacing(slice_spacing)
+    resampler.SetOutputOrigin(image.GetOrigin()[:2])
+    resampler.SetSize(slice_shape.tolist())
+    mid_image = sitk.JoinSeries([resampler.Execute(image[:, :, idx]) for idx in range(image.GetSize()[-1])])
+    mid_image.SetDirection(image.GetDirection())
+    mid_image.SetOrigin(image.GetOrigin())
+    mid_image.SetSpacing(np.concatenate([slice_spacing, [image.GetSpacing()[-1]]]))
+    # ~2x Faster than a 3D resampling with only slice spacing changed
+    
+    resampler = sitk.ResampleImageFilter()
+    resampler.SetInterpolator(z_interp)    
+    resampler.SetDefaultPixelValue(-1000)
+    resampler.SetOutputDirection(image.GetDirection())
+    resampler.SetOutputOrigin(image.GetOrigin())
+    resampler.SetOutputSpacing(target_spacing)
+    # Need this, otherwise top slice may be default value
+    resampler.SetUseNearestNeighborExtrapolator(True)
+    resampler.SetSize(new_shape.tolist())
+    
+    result = resampler.Execute(mid_image)
+    return result
 
 
 def get_sampling_info(image):
@@ -1011,19 +1049,27 @@ def get_overlap_stats(lung_pred, lung_label):
 
 
 def get_bounds(mask):
-    """Get the corners of the bounding box/cube for the given mask"""
+    """Get the corners of the bounding box/cube for the given mask
+    
+    Note
+    ----
+    This assumes the background value is 0
+    """
     is_image = False
     if isinstance(mask, sitk.Image):
-        mask = sitk.GetArrayFromImage(mask)
+        mask = sitk.GetArrayViewFromImage(mask)
+        is_image = True
+    elif isinstance(mask, itk.Image):
+        mask = itk.GetArrayViewFromImage(mask)
         is_image = True
     elif isinstance(mask, SmartImage):
-        mask = mask.as_array()
+        mask = mask.as_view()
         is_image = True
     bounds = []
     for i in range(mask.ndim):
         axis_check = np.any(mask, axis=tuple([j for j in range(mask.ndim) if j != i]))
         axis_range = np.where(axis_check == True) # noqa
-        bounds.append(slice(axis_range[0][0], axis_range[0][-1]))
+        bounds.append([axis_range[0][0], axis_range[0][-1] + 1])
     if len(bounds) == 3 and is_image:
         bounds = bounds[::-1]
     return bounds
@@ -1031,7 +1077,7 @@ def get_bounds(mask):
 
 def get_shared_bounds(mask1, mask2):
     bounds1, bounds2 = get_bounds(mask1), get_bounds(mask2)
-    shared_bounds = [slice(max(bounds1[i].start, bounds2[i].start), min(bounds1[i].stop, bounds2[i].stop), None) for i in range(len(bounds1))]
+    shared_bounds = [[max(bounds1[i], bounds2[i]), min(bounds1[i], bounds2[i]), None] for i in range(len(bounds1))]
     return shared_bounds
 
 
@@ -1069,7 +1115,7 @@ def get_label_bounds(mask, background_val=0, results_as_str=False):
         for i in range(mask.ndim):
             axis_check = np.any(label_mask, axis=tuple([j for j in range(mask.ndim) if j != i]))
             axis_range = np.where(axis_check == True) # noqa
-            bounds.append(slice(axis_range[0][0], axis_range[0][-1]))
+            bounds.append(slice(axis_range[0][0], axis_range[0][-1] + 1))
         if len(bounds) == 3 and is_image:
             bounds = bounds[::-1]
         if results_as_str:
@@ -1303,3 +1349,78 @@ def get_label_hull(label):
 @wrap4numpy
 def argmax(image, axis=-1, return_type=np.uint8):
     return image.argmax(axis=axis).astype(return_type)
+
+
+def get_unique_labels(image):
+    # NOTE: Assumes there is at least some background with value 0
+    label_filt = sitk.LabelShapeStatisticsImageFilter()
+    label_filt.SetBackgroundValue(-1)
+    label_filt.SetComputePerimeter(False)
+    label_filt.Execute(image)
+    return np.array(label_filt.GetLabels())
+
+
+def cast_to_smallest_dtype(image: sitk.Image) -> sitk.Image:
+    """Convert an image to the smallest integer dtype based on min/max values
+    
+    NOTE
+    ----
+    This will always truncate floating point values
+    """
+    if 'float' in image.GetPixelIDTypeAsString():
+        warnings.warn('truncating image values to integers')
+    filt = sitk.MinimumMaximumImageFilter()
+    filt.Execute(image)
+    minimum = filt.GetMinimum()
+    maximum = filt.GetMaximum()
+    if minimum < 0:
+        unsigned = False
+        maximum = max(maximum, abs(minimum))
+    if maximum < 256:
+        dtype = 'int8'
+    else:
+        dtype = 'int16'
+    if unsigned:
+        dtype = 'u' + dtype
+    dtype = DTYPE_STRING[dtype][1]
+    return sitk.Cast(image, dtype)
+
+
+def check_small_diff(img1: sitk.Image, img2: sitk.Image, threshold: float=1e-4, spec_thresholds: Optional[dict]=None, verbose: bool=True) -> bool:
+    """Check whether differences in image size, spacing, or origin pass a defined threshold
+    
+    Parameters
+    ----------
+    img1: sitk.Image
+        First image
+    img2: sitk.Image
+        Second image
+    threshold: float
+        The default threshold for all metric comparisons (the default is 1e-4)
+    spec_thresholds: dict | None
+        An optional dict with metrics as keys and metric-specific thresholds as values (the default is None)
+    verbose: bool
+        Whether to give a summary of any differences found (the default is True)
+        
+    Returns
+    -------
+    all_check: bool
+        Returns true if any differences passed the thresholds    
+    """
+    if spec_thresholds is None:
+        spec_thresholds = {}
+    prop1 = get_sampling_info(img1)
+    prop2 = get_sampling_info(img2)
+    all_check: bool = False
+    for metric in ['size', 'spacing', 'origin']:
+        metric_threshold = spec_thresholds.get(metric, threshold)
+        diff = np.array(prop1[metric]) - np.array(prop2[metric])
+        check = np.abs(diff) > metric_threshold
+        if np.any(check) and verbose:
+            # print({} vs {} -- Diff {}'.format(metric, str(prop1[metric]), str(prop2[metric]), str(diff)))
+            print('Large difference in {} found'.format(metric))
+            print('\tImage 1: {}'.format(prop1[metric]))
+            print('\tImage 2: {}'.format(prop2[metric]))
+            print('\tDiff   : {}'.format(diff))
+        all_check = all_check or np.any(check)
+    return all_check

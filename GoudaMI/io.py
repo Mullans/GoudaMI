@@ -183,6 +183,9 @@ CT_LABEL_COLORS = ['red', 'deepskyblue', 'lime', 'fuchsia', 'darkorange', 'yello
 def write_sitk_seg_for_slicer(data, path, colors=None, segment_labels=None, segment_prefix=None, background_val=0, compression=10):
     """Write a SimpleITK label map as an nrrd segmentation for 3DSlicer.
 
+    NOTE
+    ----
+    Does not work with overlapping labels (data has to be a label image with single labels per voxel)
 
     """
     from .ct_utils import get_label_bounds

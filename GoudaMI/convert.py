@@ -1,5 +1,10 @@
-from functools import wraps
+import functools
 import os
+import shutil
+import subprocess
+import sys
+import warnings
+from typing import Optional
 
 import itk
 import numpy as np
@@ -7,12 +12,13 @@ import SimpleITK as sitk
 import vtk
 
 from .smart_image import SmartImage
+
 #TODO - create wrap4XXX for itk, sitk, and vtk to take any format, convert to chosen, and return as original format
 
 
 def wrap4itk(func):
     """Wrap a method that takes a vtk.ImageData and returns a vtk.PolyData"""
-    @wraps(func)
+    @functools.wraps(func)
     def wrapped_func(image, *args, **kwargs):
         input_type = ''
         input_direction = image.GetDirection()
@@ -58,7 +64,7 @@ def wrap4itk(func):
 
 def wrap4numpy(func):
     """Wrap a method that takes a numpy.ndarray and returns a numpy.ndarray"""
-    @wraps(func)
+    @functools.wraps(func)
     def wrapped_func(image, *args, **kwargs):
         return_type = ''
         if isinstance(image, SmartImage):
@@ -70,6 +76,8 @@ def wrap4numpy(func):
         elif isinstance(image, itk.Image):
             arr = itk.GetArrayViewFromImage(image)
             return_type += 'itk'
+        elif isinstance(image, np.ndarray):
+            return_type = 'array'
         else:
             raise ValueError('Unknown image type: {}'.format(type(image)))
         
@@ -158,3 +166,81 @@ def images2series(images):
             raise ValueError('Unknown image type: {}'.format(type(image)))
     series = sitk.JoinSeries(slices)
     return series
+
+
+def plastimatch_rt_to_nifti(rt_path: os.PathLike, dicom_path: os.PathLike, dst_path: os.PathLike, image_dst_path: Optional[os.PathLike]=None, post_check: bool=False, verbose: bool=True) -> str:
+    """Convert an rt_struct file to a nifti file using plastimatch
+    
+    Parameters
+    ----------
+    rt_path: str
+        Filepath to the structure object
+    dicom_path: str
+        Filepath to the corresponding reference dicom image directory
+    dst_path: str
+        Filepath to save the resulting nifti object
+    image_dst_path: str | None
+        Filepath to save a nifti version of the dicom reference image
+    post_check: bool
+        Whether to do a post-processing check to ensure single channel labels (the default is False)
+    verbose: bool
+        Whether to print warnings during execution (the default is True) 
+    Returns
+    -------
+    result_string: str
+        The stdout from the plastimatch call
+    """
+    plastimatch_path = shutil.which('plastimatch')
+    if plastimatch_path is None:
+        raise ImportError('Could not find the plastimatch executable - see http://plastimatch.org/getting_started.html for installation help')
+    
+    if not os.path.exists(dicom_path):
+        raise ValueError('Could not find reference dicom at: {}'.format(dicom_path))
+    # print(f"plastimatch convert --input {rt_path} --output-ss-img {dst_path} --referenced-ct {dicom_path}")
+    result = subprocess.run([
+        'plastimatch', 'convert', 
+        '--input', rt_path,
+        '--output-ss-img', dst_path,
+        '--referenced-ct', dicom_path,
+        # '--output-img', dst_path.replace('_contour', '_image')
+    ], capture_output=True)
+    result_string = result.stdout.decode()
+    if not result_string.strip().endswith('Finished!'):
+        warnings.warn('Process finished with issues - see stderr\n' + '-' * 41)
+        print(result_string, file=sys.stderr)
+        return
+    elif 'Setting PIH from RDD' not in result_string:
+        if verbose:
+            warnings.warn('rt_struct converted without referencing dicom - see result string for details')
+    
+    if post_check:
+        dst_path = str(dst_path)
+        file_reader = sitk.ImageFileReader()
+        file_reader.SetFileName(dst_path)
+        file_reader.ReadImageInformation()
+        num_comp = file_reader.GetNumberOfComponents()
+        if num_comp > 1:
+            if verbose:
+                warnings.warn(f'Contour saved as vector with {num_comp} components - converting into union vector label')
+            label_img = sitk.ReadImage(dst_path)
+            split_img = [sitk.VectorIndexSelectionCast(label_img, idx) for idx in range(num_comp)]
+            union_label = functools.reduce(sitk.Or, split_img)
+            # sitk.WriteImage(union_label, dst_path.replace('.nii.gz', '_union.nii.gz'))
+            sitk.WriteImage(union_label, dst_path)  # should just overwrite the vector version
+    
+    if image_dst_path is not None:
+        if os.path.exists(image_dst_path):
+            if verbose:
+                warnings.warn(f'File already exists at {image_dst_path} - skipping...')
+        else:
+            result2 = subprocess.run([
+                'plastimatch', 'convert',
+                '--input', dicom_path,
+                '--output-img', image_dst_path,
+                '--output-type', 'short'  # save it as int16
+            ], capture_output=True)
+            result_string2 = result2.stdout.decode()
+            if not result_string2.strip().endswith('Finished!'):
+                warnings.warn('Dicom image conversion finished with issues - see stdeerr\n' + '-' * 57)
+                print(result_string2, file=sys.stderr)
+    return result_string

@@ -2,6 +2,7 @@ import numpy as np
 import SimpleITK as sitk
 
 from .smart_image import SmartImage
+from .ct_utils import get_unique_labels
 
 
 def get_centroid_metrics(label_image, pred_image, return_centroids=False, return_sizes=False):
@@ -164,3 +165,75 @@ def get_binary_distance_metrics(label_image, pred_image, fully_connected=False, 
         # 'AverageHausdorffDistance_SITK': avg_haus_sitk
     }
     return results
+
+
+def get_object_comparison_metrics(true_label, pred_label, dtype=sitk.sitkUInt8, result_extras={}):
+    """Get comparison metrics for each object in the true label
+
+    Parameters
+    ----------
+    true_label : sitk.Image, SmartImage
+        The ground truth binary label image
+    pred_label : sitk.Image, SmartImage
+        The predicted binary label image
+    dtype : int, optional
+        The dtype to use for the labels/connected components, by default sitk.sitkUInt8 (use sitk.sitkUInt16 if >255 objects)
+    result_extras : dict, optional
+        Extra values to put in each result in the list (for dataframes), by default {}
+
+    Returns
+    -------
+    list
+        List where each item is a dict with results for an object
+    """
+    if hasattr(true_label, 'sitk_image'):
+    # if isinstance(true_label, SmartImage):
+        true_label = true_label.sitk_image
+    if hasattr(pred_label, 'sitk_image'):
+    # if isinstance(pred_label, SmartImage):
+        pred_label = pred_label.sitk_image
+        
+    objects = sitk.Cast(sitk.ConnectedComponent(true_label), dtype)
+    pred_objects = sitk.Cast(sitk.ConnectedComponent(pred_label), dtype)
+    overlap_objects = objects * pred_label
+
+    true_object_filter = sitk.LabelShapeStatisticsImageFilter()
+    true_object_filter.SetBackgroundValue(0)
+    true_object_filter.SetComputePerimeter(False)
+    true_object_filter.Execute(objects)
+    object_labels = true_object_filter.GetLabels()
+    
+    
+    overlap_object_filter = sitk.LabelShapeStatisticsImageFilter()
+    overlap_object_filter.SetBackgroundValue(0)
+    overlap_object_filter.SetComputePerimeter(False)
+    overlap_object_filter.Execute(overlap_objects)
+
+    overlap_object_labels = overlap_object_filter.GetLabels()
+
+    overlap_metrics = []
+    for label_idx in object_labels:
+        # Get only one object at a time
+        if label_idx not in overlap_object_labels:
+            object_result = {}
+        else:
+            label_object = objects == label_idx
+            
+            # Any guessed fg object that overlaps with the true fg object
+            guessed_overlap = label_object * pred_objects
+            unique_guessed = get_unique_labels(guessed_overlap)[1:]
+            guessed_object = pred_objects == unique_guessed[0]
+            for object_idx in unique_guessed[1:]:
+                guessed_object = guessed_object + pred_objects == object_idx
+            
+            object_result = get_comparison_metrics(label_object, guessed_object)[1]
+            object_result['Coverage'] = overlap_object_filter.GetPhysicalSize(label_idx) / true_object_filter.GetPhysicalSize(label_idx)
+        object_result['ObjectSize'] = true_object_filter.GetPhysicalSize(label_idx)
+        object_result['Elongation'] = true_object_filter.GetElongation(label_idx)
+            
+        for key in result_extras:
+            object_result[key] = result_extras[key]
+        object_result['ObjectIdx'] = label_idx
+
+        overlap_metrics.append(object_result)
+    return overlap_metrics
