@@ -751,9 +751,15 @@ class SmartImage(object):
         
     def __and__(self, other):
         return self.__perform_op(sitk.And, itk.AndImageFilter, other, in_place=False)
+    
+    def binary_and(self, other):
+        return self.__and__(other)
         
     def __or__(self, other):
         return self.__perform_op(sitk.Or, itk.OrImageFilter, other, in_place=False)
+
+    def binary_or(self, other):
+        return self.__or__(other)
 
     def __perform_op(self, sitk_op, itk_op, target, in_place=False):
         """Perform one of two operations depending on current image type
