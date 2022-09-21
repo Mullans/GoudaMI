@@ -1,9 +1,11 @@
 import numpy as np
 import SimpleITK as sitk
+from typing import Union, Tuple
 
 from .smart_image import SmartImage
 from .ct_utils import get_unique_labels
 
+ImageTypeS = Union[sitk.Image, SmartImage]
 
 def get_centroid_metrics(label_image, pred_image, return_centroids=False, return_sizes=False):
     """Return centroid distances between each object in each label.
@@ -237,3 +239,47 @@ def get_object_comparison_metrics(true_label, pred_label, dtype=sitk.sitkUInt8, 
 
         overlap_metrics.append(object_result)
     return overlap_metrics
+
+
+def bilateral_overlap_stats(label1: ImageTypeS, label2: ImageTypeS) -> Tuple[dict, dict]:
+    """Get overlap stats between two images
+
+    Parameters
+    ----------
+    label1 : SimpleITK.Image, SmartImage
+        The first binary label to compare
+    label2 : SimpleITK.Image, SmartImage
+        The second binary label to compare
+        
+    Returns
+    -------
+        A tuple of dicts for the results relative to the first label and second label (in that order)
+    """
+    label1 = SmartImage(label1)
+    label2 = SmartImage(label2)
+    label1_size = label1.volume()
+    label2_size = label2.volume()
+    
+    union_label = label1.binary_and(label2)
+    union_size = union_label.volume()
+    
+    solo1 = label1 - union_label
+    solo1_size = solo1.volume()
+    solo2 = label2 - union_label
+    solo2_size = solo2.volume()
+    
+    results = [
+        {'size': label1_size,
+         'exclusive_size': solo1_size,
+         'exclusive_ratio': solo1_size / label1_size,
+         'shared_size': union_size,
+         'shared_ratio': union_size / label1_size
+        },
+        {'size': label2_size,
+         'exclusive_size': solo2_size,
+         'exclusive_ratio': solo2_size / label2_size,
+         'shared_size': union_size,
+         'shared_ratio': union_size / label2_size
+        }
+    ]
+    return results

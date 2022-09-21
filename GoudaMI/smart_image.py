@@ -666,7 +666,7 @@ class SmartImage(object):
             resampleFilter.SetOutputSpacing(ref.GetSpacing())
             resampleFilter.SetOutputDirection(ref.GetDirection())
         elif isinstance(ref, dict):
-            resampleFilter.SetSize(ref['size'])
+            resampleFilter.SetSize([int(item) for item in ref['size']])
             resampleFilter.SetOutputOrigin(ref['origin'])
             resampleFilter.SetOutputSpacing(ref['spacing'])
             resampleFilter.SetOutputDirection(ref['direction'])
@@ -811,10 +811,6 @@ class SmartImage(object):
         method : function
             The operation to apply to the image - should be the same type as the default image
         """
-        print(op)
-        print(self.image)
-        print(args)
-        print(kwargs)
         result = op(self.image, *args, **kwargs)
         if in_place:
             self.update(result)
