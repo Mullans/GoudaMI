@@ -8,9 +8,10 @@ import gouda
 import numpy as np
 import SimpleITK as sitk
 
-from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_SITK, DTYPE_STRING
+from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_NP2SITK, DTYPE_STRING
 
 try:
+    raise ImportError()
     import itk
     ITK_AVAILABLE = True
 except ImportError:
@@ -321,8 +322,8 @@ class SmartImage(object):
         image_type = self.default_type if image_type is None else image_type
         if image_type == 'sitk':
             image = self.sitk_image
-            if dtype in DTYPE_MATCH_SITK:
-                dtype = DTYPE_MATCH_SITK[dtype]
+            if dtype in DTYPE_MATCH_NP2SITK:
+                dtype = DTYPE_MATCH_NP2SITK[dtype]
             elif dtype in DTYPE_STRING:
                 dtype = DTYPE_STRING[dtype][1]
             else:

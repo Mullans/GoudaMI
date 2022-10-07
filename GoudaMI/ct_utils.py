@@ -2,7 +2,7 @@ import glob
 import os
 import warnings
 from collections.abc import Iterable
-from typing import Optional
+from typing import Optional, Tuple
 
 import gouda
 
@@ -17,9 +17,9 @@ import scipy.ndimage
 import SimpleITK as sitk
 
 from . import io
-from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_SITK, DTYPE_STRING
+from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_NP2SITK, DTYPE_STRING
 from .smart_image import SmartImage
-from .convert import wrap4numpy
+from .convert import wrap_numpy2numpy
 
 MAX_INTENSITY = 500
 MIN_INTENSITY = -1000
@@ -1345,20 +1345,37 @@ def get_label_hull(label):
     result_img.CopyInformation(label)
     return result_img    
 
-
-@wrap4numpy
+@wrap_numpy2numpy
 def argmax(image, axis=-1, return_type=np.uint8):
     return image.argmax(axis=axis).astype(return_type)
 
 
-def get_unique_labels(image):
+def get_unique_labels(image, bg_val=-1):
     # NOTE: Assumes there is at least some background with value 0
     label_filt = sitk.LabelShapeStatisticsImageFilter()
-    label_filt.SetBackgroundValue(-1)
+    label_filt.SetBackgroundValue(bg_val)
     label_filt.SetComputePerimeter(False)
     label_filt.Execute(image)
     return np.array(label_filt.GetLabels())
 
+
+def get_num_objects(label, min_size=0, bg_val=0):
+    if not isinstance(label, SmartImage):
+        label = SmartImage(label)
+    label = label.sitk_image
+    cc = sitk.ConnectedComponent(label)
+    label_filt = sitk.LabelShapeStatisticsImageFilter()
+    label_filt.SetBackgroundValue(bg_val)
+    label_filt.SetComputePerimeter(False)
+    label_filt.Execute(cc)
+    if min_size <= 0:
+        return label_filt.GetNumberOfLabels()
+    count = 0
+    for label_idx in label_filt.GetLabels():
+        if label_filt.GetPhysicalSize(label_idx) >= min_size:
+            count += 1
+    return count
+    
 
 def cast_to_smallest_dtype(image: sitk.Image) -> sitk.Image:
     """Convert an image to the smallest integer dtype based on min/max values
@@ -1384,6 +1401,14 @@ def cast_to_smallest_dtype(image: sitk.Image) -> sitk.Image:
         dtype = 'u' + dtype
     dtype = DTYPE_STRING[dtype][1]
     return sitk.Cast(image, dtype)
+
+
+def get_value_range(image: sitk.Image) -> Tuple[float, float]:
+    minimax_filt = sitk.MinimumMaximumImageFilter()
+    minimax_filt.Execute(image)
+    minimum = minimax_filt.GetMinimum()
+    maximum = minimax_filt.GetMaximum()
+    return minimum, maximum
 
 
 def check_small_diff(img1: sitk.Image, img2: sitk.Image, threshold: float=1e-4, spec_thresholds: Optional[dict]=None, verbose: bool=True) -> bool:
@@ -1424,3 +1449,29 @@ def check_small_diff(img1: sitk.Image, img2: sitk.Image, threshold: float=1e-4, 
             print('\tDiff   : {}'.format(diff))
         all_check = all_check or np.any(check)
     return all_check
+
+
+def histeresis_threshold(prob_map, lower_thresh, peak_thresh, min_peak_size=100):
+    #TODO - clean up
+    if isinstance(prob_map, SmartImage):
+        prob_map = prob_map.sitk_image
+    minimum, maximum = get_value_range(prob_map)
+    peak_map = sitk.BinaryThreshold(prob_map, peak_thresh, maximum)
+    lower_map = sitk.BinaryThreshold(prob_map, lower_thresh, maximum)
+    lower_cc = sitk.ConnectedComponent(lower_map)
+    lower_cc_peaks = lower_cc * sitk.Cast(peak_map, lower_cc.GetPixelID())
+    label_filt = sitk.LabelShapeStatisticsImageFilter()
+    label_filt.SetComputePerimeter(False)
+    label_filt.Execute(lower_cc_peaks)
+    remap = {}
+    lower_labels = get_unique_labels(lower_cc, bg_val=0)
+    peak_labels = label_filt.GetLabels()
+    for label_idx in lower_labels:
+        label_idx = int(label_idx)
+        if (label_idx not in peak_labels) or (label_filt.GetPhysicalSize(label_idx) < min_peak_size):
+            remap[label_idx] = 0
+        else:
+            remap[label_idx] = 1
+    result = sitk.ChangeLabel(lower_cc, changeMap=remap)
+    return sitk.Cast(result, sitk.sitkUInt8)
+        

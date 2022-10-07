@@ -62,8 +62,8 @@ def wrap4itk(func):
     return wrapped_func
 
 
-def wrap4numpy(func):
-    """Wrap a method that takes a numpy.ndarray and returns a numpy.ndarray"""
+def wrap_numpy2numpy(func):
+    """Wrap a method that takes a numpy.ndarray and returns a numpy.ndarray so that it takes any image and returns the same type"""
     @functools.wraps(func)
     def wrapped_func(image, *args, **kwargs):
         return_type = ''
@@ -96,6 +96,46 @@ def wrap4numpy(func):
             
         return return_image
     return wrapped_func
+
+
+def wrap_sitk(func):
+    """Wrap a method that takes a SimpleITK.Image and returns anything so that it takes any image and returns the method return type"""
+    @functools.wraps(func)
+    def wrapped_func(image, *args, **kwargs):
+        return_type = ''
+        if isinstance(image, SmartImage):
+            image = image.image
+        if isinstance(image, sitk.Image):
+            pass
+        elif isinstance(image, itk.Image):
+            image = itk2sitk(image)
+        elif isinstance(image, np.ndarray):
+            warnings.warn('Treating an array as an image ignores any physical parameters (origin, spacing, etc).')
+            image = sitk.GetImageFromArray(image)
+        else:
+            raise ValueError('Unknown image type: {}'.format(type(image)))
+    
+        return func(image, *args, **kwargs)
+    return wrapped_func
+
+
+def convert_sitk(image):
+    return_type = ''
+    if isinstance(image, SmartImage):
+        image = image.image
+        return_type = 'smart'
+    if isinstance(image, sitk.Image):
+        return_type += 'sitk'
+    elif isinstance(image, itk.Image):
+        image = itk2sitk(image)
+        return_type += 'itk'
+    elif isinstance(image, np.ndarray):
+        warnings.warn('Treating an array as an image ignores any physical parameters (origin, spacing, etc).')
+        image = sitk.GetImageFromArray(image)
+        return_type += 'array'
+    else:
+        raise ValueError('Unknown image type: {}'.format(type(image)))
+    return image, return_type
 
 
 def sitk2vtk(sitk_pointer, nb_points=None):

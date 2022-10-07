@@ -283,3 +283,54 @@ def bilateral_overlap_stats(label1: ImageTypeS, label2: ImageTypeS) -> Tuple[dic
         }
     ]
     return results
+
+
+def get_distances(label1: sitk.Image, label2: sitk.Image, direction: str='both', use_squared_distance: bool=False, use_image_spacing: bool=True, fully_connected_contours: bool=False):
+    """Return the distances from all points on one label's surface to the other and vis-versa
+
+    Parameters
+    ----------
+    label1 : sitk.Image
+        The first label image to use
+    label2 : sitk.Image
+        The second label image to use
+    direction : str, optional
+        'both' to get distances from label1 to label2 and vis-versa or 'single' to get label2's distance from label1 only, by default 'both'
+    use_squared_distance : bool, optional
+        Whether to use squared distances, by default False
+    use_image_spacing : bool, optional
+        Whether to use image spacing in distance measures, by default True
+    fully_connected_contours : bool, optional
+        Whether to use fully connected contours when creating surfaces, by default False
+
+    Returns
+    -------
+    dists or [dists1, dists2]
+        Distances from each point on label 2 to the nearest points on label 1 (optionally the same from label 1 to label 2 if direction is 'both')
+    """
+    if isinstance(label1, SmartImage):
+        label1 = label1.sitk_image
+    if isinstance(label2, SmartImage):
+        label2 = label2.sitk_image
+    
+    label1 = sitk.ConstantPad(label1, [1, 1, 1], [1, 1, 1], 0)
+    label2 = sitk.ConstantPad(label2, [1, 1, 1], [1, 1, 1], 0)
+
+    label1_dist = sitk.SignedMaurerDistanceMap(label1, squaredDistance=use_squared_distance, useImageSpacing=use_image_spacing)
+    label1_dist_arr = sitk.GetArrayViewFromImage(label1_dist)
+    label2_surf = sitk.LabelContour(label2, fullyConnected=fully_connected_contours)
+    label2_surf_arr = sitk.GetArrayViewFromImage(label2_surf).astype(bool)
+
+    if direction == 'both':
+        label2_dist = sitk.SignedMaurerDistanceMap(label2, squaredDistance=use_squared_distance, useImageSpacing=use_image_spacing)
+        label2_dist_arr = sitk.GetArrayViewFromImage(label2_dist)
+        label1_surf = sitk.LabelContour(label1, fullyConnected=fully_connected_contours)
+        label1_surf_arr = sitk.GetArrayViewFromImage(label1_surf).astype(bool)
+
+
+
+    dists1 = label1_dist_arr[label2_surf_arr]  # dist from label2 to label1
+    if direction == 'both':
+        dists2 = label2_dist_arr[label1_surf_arr]  # dist from label1 to label2
+        return dists1, dists2
+    return dists1
