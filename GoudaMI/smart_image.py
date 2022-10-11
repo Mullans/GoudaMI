@@ -8,10 +8,10 @@ import gouda
 import numpy as np
 import SimpleITK as sitk
 
-from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_NP2SITK, DTYPE_STRING
+from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_NP2SITK, DTYPE_STRING, SmartType
 
 try:
-    raise ImportError()
+    # raise ImportError()
     import itk
     ITK_AVAILABLE = True
 except ImportError:
@@ -213,12 +213,16 @@ class SmartImage(object):
     
     @property
     def dtype(self):
+        if not self.loaded:
+            dtype = self.__load_meta('dtype')
+            if dtype:
+                return dtype
         image = self.image
         if self.image_type == 'itk':
             # return type(image)  # returns the python type?
-            return itk.template(image)[1][0]  # returns the C-type
+            return SmartType.as_string(itk.template(image)[1][0])  # returns the C-type
         elif self.image_type == 'sitk':
-            return image.GetPixelIDTypeAsString()
+            return SmartType.as_string(image.GetPixelID())
     
     @property
     def image_type(self):
@@ -291,7 +295,7 @@ class SmartImage(object):
     
     @property
     def loaded(self):
-        return self.__sitk_image is None and self.__itk_image is None
+        return not (self.__sitk_image is None and self.__itk_image is None)
 
     @property
     def ndim(self):
@@ -366,7 +370,8 @@ class SmartImage(object):
                 'size': file_reader.GetSize(),
                 'origin': file_reader.GetOrigin(),
                 'spacing': file_reader.GetSpacing(),
-                'direction': file_reader.GetDirection()
+                'direction': file_reader.GetDirection(),
+                'dtype': SmartType.as_string(file_reader.GetPixelID())
             }
         return self.__meta_data[key]
             
