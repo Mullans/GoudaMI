@@ -93,6 +93,7 @@ class SmartImage(object):
         self.__updated_itk: bool = False
         self.__updated_sitk: bool = False
         self.__image_type: str = None
+        self.__meta_data: dict = None
         # These are calculated only as needed
         self.__reset_internals()
 
@@ -352,8 +353,29 @@ class SmartImage(object):
         if return_smart_image:
             return SmartImage(image)
         return image
+    
+    def __load_meta(self, key):
+        if not isinstance(self.path, (os.PathLike, str)) or self.path == '':
+            warnings.warn('Failed to load image header - please set path to correct file location')
+            return False
+        if self.__meta_data is None:
+            file_reader = sitk.ImageFileReader()
+            file_reader.SetFileName(self.path)
+            file_reader.ReadImageInformation()
+            self.__meta_data = {
+                'size': file_reader.GetSize(),
+                'origin': file_reader.GetOrigin(),
+                'spacing': file_reader.GetSpacing(),
+                'direction': file_reader.GetDirection()
+            }
+        return self.__meta_data[key]
+            
 
     def GetDirection(self):
+        if not self.loaded:
+            direction = self.__load_meta('direction') 
+            if direction:
+                return direction         
         image = self.image
         if self.image_type == 'sitk':
             return np.array(image.GetDirection())
@@ -392,6 +414,12 @@ class SmartImage(object):
 
     def GetDirectionMatrix(self):
         image = self.image
+        if not self.loaded:
+            direction = self.__load_meta('direction')
+            if direction:
+                direction = np.array(direction)
+                nrows = int(np.sqrt(direction.shape[0]))
+                return direction.reshape([nrows, -1])
         if self.image_type == 'sitk':
             direction = np.array(image.GetDirection())
             nrows = int(np.sqrt(direction.shape[0]))
@@ -409,16 +437,40 @@ class SmartImage(object):
         }
 
     def GetOrigin(self):
+        if not self.loaded:
+            origin = self.__load_meta('origin')
+            if origin:
+                return origin
         return np.array(self.image.GetOrigin())
-
+    
+    def GetOppositeCorner(self):
+        """Return the coordinates of the corner opposite to the origin"""
+        # TODO - double check that this is correct, Slicer seems to disagree
+        size = self.GetPhysicalSize()
+        # TODO - update if needed, this assumes only 180 flipped directions
+        direction = self.GetDirectionMatrix()
+        direction = np.array([direction[i, i] for i in range(direction.shape[0])])
+        return self.GetOrigin() + size * direction
+        
     def GetSize(self):
+        if not self.loaded:
+            size = self.__load_meta('size')
+            if size:
+                return size
         image = self.image
         if self.image_type == 'sitk':
             return np.array(image.GetSize())
         elif self.image_type == 'itk':
             return np.array(image.GetLargestPossibleRegion().GetSize())
+        
+    def GetPhysicalSize(self):
+        return self.GetSize() * self.GetSpacing()
 
     def GetSpacing(self):
+        if not self.loaded:
+            spacing = self.__load_meta('spacing')
+            if spacing:
+                return spacing
         return np.array(self.image.GetSpacing())
 
     def CopyInformation(self, ref_image):
