@@ -299,6 +299,10 @@ class SmartImage(object):
 
     @property
     def ndim(self):
+        if not self.loaded:
+            ndim = self.__load_meta('ndim')
+            if ndim:
+                return ndim
         image = self.image
         if self.image_type == 'sitk':
             return image.GetDimension()
@@ -371,7 +375,8 @@ class SmartImage(object):
                 'origin': file_reader.GetOrigin(),
                 'spacing': file_reader.GetSpacing(),
                 'direction': file_reader.GetDirection(),
-                'dtype': SmartType.as_string(file_reader.GetPixelID())
+                'dtype': SmartType.as_string(file_reader.GetPixelID()),
+                'ndim': file_reader.GetDimension()
             }
         return self.__meta_data[key]
             
