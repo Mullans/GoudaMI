@@ -2,7 +2,7 @@ import glob
 import os
 import warnings
 from collections.abc import Iterable
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import gouda
 
@@ -17,7 +17,7 @@ import scipy.ndimage
 import SimpleITK as sitk
 
 from . import io
-from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_NP2SITK, DTYPE_STRING
+from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_NP2SITK, DTYPE_STRING, SmartType
 from .smart_image import SmartImage
 from .convert import wrap_numpy2numpy
 
@@ -1259,12 +1259,10 @@ def zeros_like(image, dtype=None):
         image = get_sampling_info(image)
     if dtype is not None:
         image['dtype'] = dtype
-    zero_image = sitk.Image(image['size'], image['dtype'])
+    zero_image = sitk.Image(tuple(image['size'].tolist()), SmartType.as_sitk(image['dtype']))
     zero_image.SetOrigin(image['origin'])
     zero_image.SetSpacing(image['spacing'])
     zero_image.SetDirection(image['direction'])
-    if isinstance(image, SmartImage):
-        zero_image = SmartImage(zero_image)
     return zero_image
 
 
@@ -1377,30 +1375,45 @@ def get_num_objects(label, min_size=0, bg_val=0):
     return count
     
 
-def cast_to_smallest_dtype(image: sitk.Image) -> sitk.Image:
+def cast_to_smallest_dtype(image: Union[sitk.Image, SmartImage]) -> sitk.Image:
     """Convert an image to the smallest integer dtype based on min/max values
     
     NOTE
     ----
     This will always truncate floating point values
     """
+    if isinstance(image, SmartImage):
+        image = image.sitk_image
     if 'float' in image.GetPixelIDTypeAsString():
         warnings.warn('truncating image values to integers')
     filt = sitk.MinimumMaximumImageFilter()
     filt.Execute(image)
     minimum = filt.GetMinimum()
     maximum = filt.GetMaximum()
-    if minimum < 0:
-        unsigned = False
-        maximum = max(maximum, abs(minimum))
-    if maximum < 256:
-        dtype = 'int8'
+    to_check = ['int8', 'int16', 'int32', 'int64']
+    if minimum >= 0:
+        to_check = ['u' + item for item in to_check]
+    for item in to_check:
+        dtype_range = np.iinfo(item)
+        if minimum >= dtype_range.min and maximum <= dtype_range.max:
+            dtype = item
+            break
     else:
-        dtype = 'int16'
-    if unsigned:
-        dtype = 'u' + dtype
-    dtype = DTYPE_STRING[dtype][1]
-    return sitk.Cast(image, dtype)
+        raise ValueError('Unable to find proper dtype - this should never happen')        
+    #     unsigned = False
+    #     if minimum >= np.iinfo(np.int8) and maximum <= np.iinfo(np.int8):
+    #         dtype = 'int8'
+    #     elif minimum >= np.iinfo(np.int16) and maximum <= np.iinfo(np.int16):
+    #         dtype = 'int16'
+    #     maximum = max(maximum, abs(minimum))
+    # if (maximum < np.iinfo(np.uint8).min:
+    #     dtype = 'int8'
+    # elif maximum < 32767:
+    #     dtype = 'int16'
+    # if unsigned:
+    #     dtype = 'u' + dtype
+    # dtype = DTYPE_STRING[dtype][1]
+    return sitk.Cast(image, SmartType.as_sitk(dtype))
 
 
 def get_value_range(image: sitk.Image) -> Tuple[float, float]:
@@ -1456,6 +1469,10 @@ def histeresis_threshold(prob_map, lower_thresh, peak_thresh, min_peak_size=100)
     if isinstance(prob_map, SmartImage):
         prob_map = prob_map.sitk_image
     minimum, maximum = get_value_range(prob_map)
+    if peak_thresh > maximum:
+        raise ValueError('Peak threshold cannot be greater than maximum image value')
+    if lower_thresh > maximum:
+        raise ValueError('Lower threshold cannot be greater than maximum image value')
     peak_map = sitk.BinaryThreshold(prob_map, peak_thresh, maximum)
     lower_map = sitk.BinaryThreshold(prob_map, lower_thresh, maximum)
     lower_cc = sitk.ConnectedComponent(lower_map)
@@ -1475,3 +1492,16 @@ def histeresis_threshold(prob_map, lower_thresh, peak_thresh, min_peak_size=100)
     result = sitk.ChangeLabel(lower_cc, changeMap=remap)
     return sitk.Cast(result, sitk.sitkUInt8)
         
+def check_label_on_border(image: Union[sitk.Image, SmartImage]):
+    if isinstance(image, SmartImage):
+        image = image.sitk_image
+        
+    filt = sitk.LabelShapeStatisticsImageFilter()
+    filt.SetBackgroundValue(0)
+    filt.ComputePerimeterOn()
+    filt.Execute(image)
+    
+    results = {}
+    for label in filt.GetLabels():
+        results[label] = filt.GetPerimeterOnBorder(label) > 0
+    return results
