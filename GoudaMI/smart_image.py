@@ -215,7 +215,7 @@ class SmartImage(object):
     def dtype(self):
         if not self.loaded:
             dtype = self.__load_meta('dtype')
-            if dtype:
+            if dtype is not None:
                 return dtype
         image = self.image
         if self.image_type == 'itk':
@@ -301,7 +301,7 @@ class SmartImage(object):
     def ndim(self):
         if not self.loaded:
             ndim = self.__load_meta('ndim')
-            if ndim:
+            if ndim is not None:
                 return ndim
         image = self.image
         if self.image_type == 'sitk':
@@ -365,16 +365,16 @@ class SmartImage(object):
     def __load_meta(self, key):
         if not isinstance(self.path, (os.PathLike, str)) or self.path == '':
             warnings.warn('Failed to load image header - please set path to correct file location')
-            return False
+            return None
         if self.__meta_data is None:
             file_reader = sitk.ImageFileReader()
             file_reader.SetFileName(self.path)
             file_reader.ReadImageInformation()
             self.__meta_data = {
-                'size': file_reader.GetSize(),
-                'origin': file_reader.GetOrigin(),
-                'spacing': file_reader.GetSpacing(),
-                'direction': file_reader.GetDirection(),
+                'size': np.array(file_reader.GetSize()),
+                'origin': np.array(file_reader.GetOrigin()),
+                'spacing': np.array(file_reader.GetSpacing()),
+                'direction': np.array(file_reader.GetDirection()),
                 'dtype': SmartType.as_string(file_reader.GetPixelID()),
                 'ndim': file_reader.GetDimension()
             }
@@ -384,7 +384,7 @@ class SmartImage(object):
     def GetDirection(self):
         if not self.loaded:
             direction = self.__load_meta('direction') 
-            if direction:
+            if direction is not None:
                 return direction         
         image = self.image
         if self.image_type == 'sitk':
@@ -426,7 +426,7 @@ class SmartImage(object):
         image = self.image
         if not self.loaded:
             direction = self.__load_meta('direction')
-            if direction:
+            if direction is not None:
                 direction = np.array(direction)
                 nrows = int(np.sqrt(direction.shape[0]))
                 return direction.reshape([nrows, -1])
@@ -449,7 +449,7 @@ class SmartImage(object):
     def GetOrigin(self):
         if not self.loaded:
             origin = self.__load_meta('origin')
-            if origin:
+            if origin is not None:
                 return origin
         return np.array(self.image.GetOrigin())
     
@@ -465,7 +465,7 @@ class SmartImage(object):
     def GetSize(self):
         if not self.loaded:
             size = self.__load_meta('size')
-            if size:
+            if size is not None:
                 return size
         image = self.image
         if self.image_type == 'sitk':
@@ -479,7 +479,7 @@ class SmartImage(object):
     def GetSpacing(self):
         if not self.loaded:
             spacing = self.__load_meta('spacing')
-            if spacing:
+            if spacing is not None:
                 return spacing
         return np.array(self.image.GetSpacing())
 
@@ -879,3 +879,17 @@ class SmartImage(object):
             self.update(result)
             return self
         return result
+
+    @staticmethod
+    def zeros_like(image, dtype=None):
+        if not isinstance(image, dict):
+            image = SmartImage(image).get_physical_properties()
+        if dtype is not None:
+            image['dtype'] = dtype
+        if isinstance(image['size'], np.ndarray):
+            image['size'] = tuple(image['size'].tolist())
+        zero_image = sitk.Image(image['size'], SmartType.as_sitk(image['dtype']))
+        zero_image.SetOrigin(image['origin'])
+        zero_image.SetSpacing(image['spacing'])
+        zero_image.SetDirection(image['direction'])
+        return SmartImage(zero_image)
