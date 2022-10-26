@@ -754,6 +754,7 @@ class SmartImage(object):
     def __iadd__(self, other):
         result = self.__perform_op(sitk.Add, itk.AddImageFilter, other, in_place=True)
         self.update(result)
+        return self
 
     def __eq__(self, other):
         image = self.image
@@ -811,6 +812,7 @@ class SmartImage(object):
     def __isub__(self, other):
         result = self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, in_place=True)
         self.update(result)
+        return self
         
     def __and__(self, other):
         return self.__perform_op(sitk.And, itk.AndImageFilter, other, in_place=False)

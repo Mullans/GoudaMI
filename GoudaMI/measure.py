@@ -1,11 +1,14 @@
+from typing import Tuple, Union
+
 import numpy as np
 import SimpleITK as sitk
-from typing import Union, Tuple
+from scipy import ndimage
 
-from .smart_image import SmartImage
 from .ct_utils import get_unique_labels
+from .smart_image import SmartImage
 
 ImageTypeS = Union[sitk.Image, SmartImage]
+
 
 def get_centroid_metrics(label_image, pred_image, return_centroids=False, return_sizes=False):
     """Return centroid distances between each object in each label.
@@ -35,10 +38,12 @@ def get_centroid_metrics(label_image, pred_image, return_centroids=False, return
         pred_centroids[label] = np.array(filter2.GetCentroid(label))
         pred_sizes[label] = filter2.GetPhysicalSize(label)
 
-    dist_arr = np.zeros([max(label_centroids.keys()), max(pred_centroids.keys())])
+    dist_arr = np.zeros([max(label_centroids.keys()),
+                        max(pred_centroids.keys())])
     for label_key in label_centroids:
         for pred_key in pred_centroids:
-            dist_arr[label_key - 1, pred_key - 1] = np.linalg.norm(label_centroids[label_key] - pred_centroids[pred_key])
+            dist_arr[label_key - 1, pred_key - 1] = np.linalg.norm(
+                label_centroids[label_key] - pred_centroids[pred_key])
 
     to_return = [dist_arr]
     if return_centroids:
@@ -74,7 +79,8 @@ def get_comparison_metrics(label_image, pred_image, overlap_metrics=True, distan
             for key in overlap_results:
                 image_results[label_idx][key] = overlap_results[key]
         if distance_metrics:
-            dist_results = get_binary_distance_metrics(label_image, pred_image, label=int(label_idx), fully_connected=fully_connected)
+            dist_results = get_binary_distance_metrics(
+                label_image, pred_image, label=int(label_idx), fully_connected=fully_connected)
             for key in dist_results:
                 image_results[label_idx][key] = float(dist_results[key])
     return image_results
@@ -106,11 +112,13 @@ def get_binary_distance_metrics(label_image, pred_image, fully_connected=False, 
     pred_image = sitk.ConstantPad(pred_image, [1, 1, 1], [1, 1, 1], 0)
 
     # label_dist = sitk.SignedDanielssonDistanceMap(label_image, squaredDistance=False, useImageSpacing=True)
-    label_dist = sitk.SignedMaurerDistanceMap(label_image, squaredDistance=False, useImageSpacing=True)
+    label_dist = sitk.SignedMaurerDistanceMap(
+        label_image, squaredDistance=False, useImageSpacing=True)
     label_surf = sitk.LabelContour(label_image, fullyConnected=fully_connected)
 
     # pred_dist = sitk.SignedDanielssonDistanceMap(pred_image, squaredDistance=False, useImageSpacing=True)
-    pred_dist = sitk.SignedMaurerDistanceMap(pred_image, squaredDistance=False, useImageSpacing=True)
+    pred_dist = sitk.SignedMaurerDistanceMap(
+        pred_image, squaredDistance=False, useImageSpacing=True)
     pred_surf = sitk.LabelContour(pred_image, fullyConnected=fully_connected)
 
     label_surf_arr = sitk.GetArrayViewFromImage(label_surf).astype(bool)
@@ -147,7 +155,7 @@ def get_binary_distance_metrics(label_image, pred_image, fully_connected=False, 
         haus_dist = np.max(np.maximum(all_dist_arr, 0))
         haus_95 = np.percentile(np.maximum(all_dist_arr, 0), [95])[0]
 
-        ## Just to validate hausdorff
+        # Just to validate hausdorff
         # hausdorff_filter = sitk.HausdorffDistanceImageFilter()
         # hausdorff_filter.Execute(label_image, pred_image)
         # haus_sitk = float(hausdorff_filter.GetHausdorffDistance())
@@ -189,12 +197,12 @@ def get_object_comparison_metrics(true_label, pred_label, dtype=sitk.sitkUInt8, 
         List where each item is a dict with results for an object
     """
     if hasattr(true_label, 'sitk_image'):
-    # if isinstance(true_label, SmartImage):
+        # if isinstance(true_label, SmartImage):
         true_label = true_label.sitk_image
     if hasattr(pred_label, 'sitk_image'):
-    # if isinstance(pred_label, SmartImage):
+        # if isinstance(pred_label, SmartImage):
         pred_label = pred_label.sitk_image
-        
+
     objects = sitk.Cast(sitk.ConnectedComponent(true_label), dtype)
     pred_objects = sitk.Cast(sitk.ConnectedComponent(pred_label), dtype)
     overlap_objects = objects * pred_label
@@ -204,8 +212,7 @@ def get_object_comparison_metrics(true_label, pred_label, dtype=sitk.sitkUInt8, 
     true_object_filter.SetComputePerimeter(False)
     true_object_filter.Execute(objects)
     object_labels = true_object_filter.GetLabels()
-    
-    
+
     overlap_object_filter = sitk.LabelShapeStatisticsImageFilter()
     overlap_object_filter.SetBackgroundValue(0)
     overlap_object_filter.SetComputePerimeter(False)
@@ -220,19 +227,23 @@ def get_object_comparison_metrics(true_label, pred_label, dtype=sitk.sitkUInt8, 
             object_result = {}
         else:
             label_object = objects == label_idx
-            
+
             # Any guessed fg object that overlaps with the true fg object
             guessed_overlap = label_object * pred_objects
             unique_guessed = get_unique_labels(guessed_overlap)[1:]
             guessed_object = pred_objects == unique_guessed[0]
             for object_idx in unique_guessed[1:]:
                 guessed_object = guessed_object + pred_objects == object_idx
-            
-            object_result = get_comparison_metrics(label_object, guessed_object)[1]
-            object_result['Coverage'] = overlap_object_filter.GetPhysicalSize(label_idx) / true_object_filter.GetPhysicalSize(label_idx)
-        object_result['ObjectSize'] = true_object_filter.GetPhysicalSize(label_idx)
-        object_result['Elongation'] = true_object_filter.GetElongation(label_idx)
-            
+
+            object_result = get_comparison_metrics(
+                label_object, guessed_object)[1]
+            object_result['Coverage'] = overlap_object_filter.GetPhysicalSize(
+                label_idx) / true_object_filter.GetPhysicalSize(label_idx)
+        object_result['ObjectSize'] = true_object_filter.GetPhysicalSize(
+            label_idx)
+        object_result['Elongation'] = true_object_filter.GetElongation(
+            label_idx)
+
         for key in result_extras:
             object_result[key] = result_extras[key]
         object_result['ObjectIdx'] = label_idx
@@ -250,7 +261,7 @@ def bilateral_overlap_stats(label1: ImageTypeS, label2: ImageTypeS) -> Tuple[dic
         The first binary label to compare
     label2 : SimpleITK.Image, SmartImage
         The second binary label to compare
-        
+
     Returns
     -------
         A tuple of dicts for the results relative to the first label and second label (in that order)
@@ -259,33 +270,97 @@ def bilateral_overlap_stats(label1: ImageTypeS, label2: ImageTypeS) -> Tuple[dic
     label2 = SmartImage(label2)
     label1_size = label1.volume()
     label2_size = label2.volume()
-    
+
     union_label = label1.binary_and(label2)
     union_size = union_label.volume()
-    
+
     solo1 = label1 - union_label
     solo1_size = solo1.volume()
     solo2 = label2 - union_label
     solo2_size = solo2.volume()
-    
+
     results = [
         {'size': label1_size,
          'exclusive_size': solo1_size,
          'exclusive_ratio': solo1_size / label1_size,
          'shared_size': union_size,
          'shared_ratio': union_size / label1_size
-        },
+         },
         {'size': label2_size,
          'exclusive_size': solo2_size,
          'exclusive_ratio': solo2_size / label2_size,
          'shared_size': union_size,
          'shared_ratio': union_size / label2_size
-        }
+         }
     ]
     return results
 
 
-def get_distances(label1: sitk.Image, label2: sitk.Image, direction: str='both', use_squared_distance: bool=False, use_image_spacing: bool=True, fully_connected_contours: bool=False):
+def normalized_surface_dice(label1: sitk.Image, label2: sitk.Image, tol: float):
+    """Return the NSD between two binary labels
+
+    Parameters
+    ----------
+    label1 : sitk.Image
+        First binary label image
+    label2 : sitk.Image
+        Second binary label image
+    tol : float
+        The tolerated difference between boundaries
+    kwargs : dict
+        Optional keyword arguments to pass to :func:`GoudaMI.measure.get_distances`
+
+
+    NOTE
+    ----
+    The Normalized Surface Dice (aka Normalized Surface Distance, Surface Dice) is an uncertainty-aware measure used to compare the overlap between two segmentation surfaces. Rather than using voxel overlap, it measures the overlap of the surfaces within a tolerance distance of eachother. This tolerance can be based on domain-requirements or inter-observer variability.
+    Original Pub: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8314151/
+    Original Implementation: https://github.com/deepmind/surface-distance/
+    """
+    from ._measure_deepmind import (
+        ENCODE_NEIGHBOURHOOD_3D_KERNEL,
+        create_table_neighbour_code_to_surface_area)
+    label1 = SmartImage(label1).sitk_image
+    label2 = SmartImage(label2).sitk_image
+
+    spacing = np.asarray(label1.GetSpacing())
+    spacing = spacing[::-1]
+    neighborhood_code = create_table_neighbour_code_to_surface_area(spacing)
+    sitk_kernel = sitk.GetImageFromArray(
+        ENCODE_NEIGHBOURHOOD_3D_KERNEL.astype(np.uint8))
+    full_true_neighbors = 0b11111111
+
+    gt_code_map = sitk.Convolution(label1, sitk_kernel, boundaryCondition=0)
+    gt_code_map_arr = sitk.GetArrayViewFromImage(gt_code_map)
+    gt_surface_area_map = neighborhood_code[gt_code_map_arr]
+    gt_borders = sitk.And(gt_code_map != 0, gt_code_map != full_true_neighbors)
+    gt_surfel_area = gt_surface_area_map[sitk.GetArrayViewFromImage(
+        gt_borders).astype(np.bool_)]
+    gt_dist_map = sitk.SignedMaurerDistanceMap(gt_borders, squaredDistance=False, useImageSpacing=True, insideIsPositive=False)
+
+    pred_code_map = sitk.Convolution(label2, sitk_kernel, boundaryCondition=0)
+    pred_code_map_arr = sitk.GetArrayViewFromImage(pred_code_map)
+    pred_surface_area_map = neighborhood_code[pred_code_map_arr]
+    pred_borders = sitk.And(pred_code_map != 0, pred_code_map != full_true_neighbors)
+    pred_surfel_area = pred_surface_area_map[sitk.GetArrayViewFromImage(
+        pred_borders).astype(np.bool_)]
+    pred_dist_map = sitk.SignedMaurerDistanceMap(pred_borders, squaredDistance=False, useImageSpacing=True, insideIsPositive=False)
+
+    gt_dist = sitk.GetArrayViewFromImage(gt_dist_map)
+    gt_bord = sitk.GetArrayViewFromImage(gt_borders).astype(np.bool_)
+    pred_dist = sitk.GetArrayViewFromImage(pred_dist_map)
+    pred_bord = sitk.GetArrayViewFromImage(pred_borders).astype(np.bool_)
+
+    dist_gt2pred = pred_dist[gt_bord]
+    dist_pred2gt = gt_dist[pred_bord]
+    gt_overlap = np.sum(gt_surfel_area[dist_gt2pred <= tol])
+    pred_overlap = np.sum(pred_surfel_area[dist_pred2gt <= tol])
+    gt_surf_area = np.sum(gt_surfel_area)
+    pred_surf_area = np.sum(pred_surfel_area)
+    return (gt_overlap + pred_overlap) / (gt_surf_area + pred_surf_area)
+
+
+def get_distances(label1: sitk.Image, label2: sitk.Image, direction: str = 'both', use_squared_distance: bool = False, use_image_spacing: bool = True, fully_connected_contours: bool = False):
     """Return the distances from all points on one label's surface to the other and vis-versa
 
     Parameters
@@ -312,22 +387,24 @@ def get_distances(label1: sitk.Image, label2: sitk.Image, direction: str='both',
         label1 = label1.sitk_image
     if isinstance(label2, SmartImage):
         label2 = label2.sitk_image
-    
+
     label1 = sitk.ConstantPad(label1, [1, 1, 1], [1, 1, 1], 0)
     label2 = sitk.ConstantPad(label2, [1, 1, 1], [1, 1, 1], 0)
 
-    label1_dist = sitk.SignedMaurerDistanceMap(label1, squaredDistance=use_squared_distance, useImageSpacing=use_image_spacing)
+    label1_dist = sitk.SignedMaurerDistanceMap(
+        label1, squaredDistance=use_squared_distance, useImageSpacing=use_image_spacing)
     label1_dist_arr = sitk.GetArrayViewFromImage(label1_dist)
-    label2_surf = sitk.LabelContour(label2, fullyConnected=fully_connected_contours)
+    label2_surf = sitk.LabelContour(
+        label2, fullyConnected=fully_connected_contours)
     label2_surf_arr = sitk.GetArrayViewFromImage(label2_surf).astype(bool)
 
     if direction == 'both':
-        label2_dist = sitk.SignedMaurerDistanceMap(label2, squaredDistance=use_squared_distance, useImageSpacing=use_image_spacing)
+        label2_dist = sitk.SignedMaurerDistanceMap(
+            label2, squaredDistance=use_squared_distance, useImageSpacing=use_image_spacing)
         label2_dist_arr = sitk.GetArrayViewFromImage(label2_dist)
-        label1_surf = sitk.LabelContour(label1, fullyConnected=fully_connected_contours)
+        label1_surf = sitk.LabelContour(
+            label1, fullyConnected=fully_connected_contours)
         label1_surf_arr = sitk.GetArrayViewFromImage(label1_surf).astype(bool)
-
-
 
     dists1 = label1_dist_arr[label2_surf_arr]  # dist from label2 to label1
     if direction == 'both':
