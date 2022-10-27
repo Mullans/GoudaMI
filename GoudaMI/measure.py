@@ -177,7 +177,7 @@ def get_binary_distance_metrics(label_image, pred_image, fully_connected=False, 
     return results
 
 
-def get_object_comparison_metrics(true_label, pred_label, dtype=sitk.sitkUInt8, result_extras={}):
+def get_object_comparison_metrics(true_label, pred_label, dtype=sitk.sitkUInt8, result_extras=None):
     """Get comparison metrics for each object in the true label
 
     Parameters
@@ -189,7 +189,7 @@ def get_object_comparison_metrics(true_label, pred_label, dtype=sitk.sitkUInt8, 
     dtype : int, optional
         The dtype to use for the labels/connected components, by default sitk.sitkUInt8 (use sitk.sitkUInt16 if >255 objects)
     result_extras : dict, optional
-        Extra values to put in each result in the list (for dataframes), by default {}
+        Extra key/value pairs to put in each result in the list (for dataframes), by default None
 
     Returns
     -------
@@ -202,6 +202,7 @@ def get_object_comparison_metrics(true_label, pred_label, dtype=sitk.sitkUInt8, 
     if hasattr(pred_label, 'sitk_image'):
         # if isinstance(pred_label, SmartImage):
         pred_label = pred_label.sitk_image
+    result_extras = {} if result_extras is None else result_extras
 
     objects = sitk.Cast(sitk.ConnectedComponent(true_label), dtype)
     pred_objects = sitk.Cast(sitk.ConnectedComponent(pred_label), dtype)
@@ -296,8 +297,8 @@ def bilateral_overlap_stats(label1: ImageTypeS, label2: ImageTypeS) -> Tuple[dic
     return results
 
 
-def normalized_surface_dice(label1: sitk.Image, label2: sitk.Image, tol: float):
-    """Return the NSD between two binary labels
+def normalized_surface_dice(label1: sitk.Image, label2: sitk.Image, tol: float = 2):
+    """Return the NSD between two 3D binary labels
 
     Parameters
     ----------
@@ -306,7 +307,7 @@ def normalized_surface_dice(label1: sitk.Image, label2: sitk.Image, tol: float):
     label2 : sitk.Image
         Second binary label image
     tol : float
-        The tolerated difference between boundaries
+        The tolerated difference between boundaries, by default 2
     kwargs : dict
         Optional keyword arguments to pass to :func:`GoudaMI.measure.get_distances`
 
@@ -316,6 +317,19 @@ def normalized_surface_dice(label1: sitk.Image, label2: sitk.Image, tol: float):
     The Normalized Surface Dice (aka Normalized Surface Distance, Surface Dice) is an uncertainty-aware measure used to compare the overlap between two segmentation surfaces. Rather than using voxel overlap, it measures the overlap of the surfaces within a tolerance distance of eachother. This tolerance can be based on domain-requirements or inter-observer variability.
     Original Pub: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8314151/
     Original Implementation: https://github.com/deepmind/surface-distance/
+
+    Some recommended tolerances in CT images (from the FLARE22 competition):
+        * Adrenal Gland (Left/Right)- 2mm
+        * Aorta - 2mm
+        * Duodenum - 7mm
+        * Esophagus - 3mm
+        * Gallbladder - 2mm
+        * Inferior Vena Cava - 2mm
+        * Kidney (Right/Left) - 3mm
+        * Liver - 5mm
+        * Pancreas - 5mm
+        * Spleen - 3mm
+        * Stomach - 5mm
     """
     from ._measure_deepmind import (
         ENCODE_NEIGHBOURHOOD_3D_KERNEL,

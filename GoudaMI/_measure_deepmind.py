@@ -1,6 +1,6 @@
 # These bits of code were borrowed from github.com/deepmind/surface-distance
 # so that I don't have to re-do all of the work they already have provided.
-# Anything below this point is subject to the license they originally 
+# Anything below this point is subject to the license they originally
 # published it under.
 
 # Copyright 2018 Google Inc. All Rights Reserved.
@@ -20,8 +20,8 @@ import numpy as np
 from scipy import ndimage
 import SimpleITK as sitk
 
-ENCODE_NEIGHBOURHOOD_3D_KERNEL = np.array([[[128, 64], [32, 16]], [[8, 4],
-                                                                   [2, 1]]])
+ENCODE_NEIGHBOURHOOD_3D_KERNEL = np.array([[[128, 64], [32, 16]],
+                                           [[8, 4], [2, 1]]])
 
 _NEIGHBOUR_CODE_TO_NORMALS = [
     [[0, 0, 0]],
@@ -342,7 +342,7 @@ def normalized_surface_dice_old(label1: sitk.Image, label2: sitk.Image, tol: flo
     pred_arr = sitk.GetArrayFromImage(label2).astype(np.bool_)
     spacing = np.array(label1.GetSpacing())
     spacing = spacing[::-1]
-    
+
     neighborhood_code = create_table_neighbour_code_to_surface_area(spacing)
     kernel = ENCODE_NEIGHBOURHOOD_3D_KERNEL
     full_true_neighbors = 0b11111111
