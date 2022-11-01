@@ -11,18 +11,21 @@ try:
 except ImportError:
     pass  # moved warning to __init__.py
     # warnings.warn("Could not import ITK module - some methods may not work")
-    
+
 import numpy as np
 import scipy.ndimage
 import SimpleITK as sitk
 
 from . import io
-from .constants import DTYPE_MATCH_ITK, DTYPE_MATCH_NP2SITK, DTYPE_STRING, SmartType
-from .smart_image import SmartImage
+from .constants import SmartType
 from .convert import wrap_numpy2numpy
+from .smart_image import ImageType, SmartImage, get_image_type, as_image
 
 MAX_INTENSITY = 500
 MIN_INTENSITY = -1000
+
+
+# NOTE - reference for some interfacing: https://github.com/SimpleITK/SimpleITK/blob/4aabd77bddf508c1d55519fbf6002180a08f9208/Wrapping/Python/Python.i#L764-L794
 
 
 def quick_save(data, label=None, skip_existing_filenames=False):
@@ -205,21 +208,6 @@ def fill_slices(arr, dilate=0, erode=0, axis=0):
         output = sitk.GetImageFromArray(output)
         output.CopyInformation(src_img)
     return output
-
-
-def get_largest_n_objects(binary_image, n=1):
-    if not isinstance(binary_image, sitk.Image):
-        raise ValueError("mask_body requires a SimpleITK.Image object")
-    labels = sitk.ConnectedComponent(binary_image)
-    lfilter = sitk.LabelShapeStatisticsImageFilter()
-    lfilter.Execute(labels)
-    body_label = [-1, -1]
-    for label in lfilter.GetLabels():
-        label_area = lfilter.GetNumberOfPixels(label)
-        if label_area > body_label[1]:
-            body_label = [label, label_area]
-    bin_img = sitk.Equal(labels, body_label)
-    return bin_img
 
 
 def mask_body(image, opening_size=1):
@@ -455,7 +443,7 @@ def resample_separate_z(image, target_spacing, slice_interp=sitk.sitkBSpline, z_
         z_interp += 1
     # Some applications have 0=NN, 1=Linear, but sitk has 1=NN and 2=Linear
     new_shape = np.round((np.float32(image.GetSpacing()) / np.float32(target_spacing)) * np.float32(image.GetSize())).astype(int)
-    
+
     slice_spacing = target_spacing[:2]
     slice_shape = new_shape[:2]
     resampler = sitk.ResampleImageFilter()
@@ -469,9 +457,9 @@ def resample_separate_z(image, target_spacing, slice_interp=sitk.sitkBSpline, z_
     mid_image.SetOrigin(image.GetOrigin())
     mid_image.SetSpacing(np.concatenate([slice_spacing, [image.GetSpacing()[-1]]]))
     # ~2x Faster than a 3D resampling with only slice spacing changed
-    
+
     resampler = sitk.ResampleImageFilter()
-    resampler.SetInterpolator(z_interp)    
+    resampler.SetInterpolator(z_interp)
     resampler.SetDefaultPixelValue(-1000)
     resampler.SetOutputDirection(image.GetDirection())
     resampler.SetOutputOrigin(image.GetOrigin())
@@ -479,7 +467,7 @@ def resample_separate_z(image, target_spacing, slice_interp=sitk.sitkBSpline, z_
     # Need this, otherwise top slice may be default value
     resampler.SetUseNearestNeighborExtrapolator(True)
     resampler.SetSize(new_shape.tolist())
-    
+
     result = resampler.Execute(mid_image)
     return result
 
@@ -855,24 +843,36 @@ def get_distances(image_1, image_2, sampling=1, connectivity=1):
     return np.concatenate([np.ravel(dta[surf_2 != 0]), np.ravel(dtb[surf_1 != 0])])
 
 
-def get_biggest_object(mask):
-    components = sitk.ConnectedComponent(mask)
+def get_largest_object(label: ImageType, n_objects: int = 1) -> ImageType:
+    """Remove all but the largest n objects from a label
+
+    Parameters
+    ----------
+    label : ImageType
+        The label to evaluate
+    n_objects : int, optional
+        The number of objects to preserve, by default 1
+    """
+    image_type = get_image_type(label)
+    if image_type != 'sitk':
+        label = as_image(label).sitk_image
+    components = sitk.ConnectedComponent(label)
     lfilter = sitk.LabelShapeStatisticsImageFilter()
     lfilter.Execute(components)
-    labels = lfilter.GetLabels()
-    biggest = [-1, -1]
-    for label in labels:
-        value = lfilter.GetNumberOfPixels(label)
-        if value > biggest[0]:
-            biggest = [value, label]
-
-    changes = {label: 1 if label == biggest[1] else 0 for label in labels}
+    label_sizes = [[lfilter.GetNumberOfPixels(label), label] for label in lfilter.GetLabels()]
+    label_sizes = sorted(label_sizes, key=lambda x: x[0], reverse=True)
+    changes = {}
+    for idx, (_, label) in enumerate(label_sizes):
+        changes[label] = 1 if idx < n_objects else 0
     output = sitk.ChangeLabel(components, changeMap=changes)
+    output = sitk.Cast(output, label.GetPixelID())
+    if image_type == 'smartimage':
+        output = SmartImage(output)
     return output
 
 
 def otsu_threshold(values, bins='auto'):
-    hist, bin_edges = np.histogram(values, bins='auto')
+    hist, bin_edges = np.histogram(values, bins=bins)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
     weight1 = np.cumsum(hist)
     weight2 = np.cumsum(hist[::-1])[::-1]
@@ -994,7 +994,7 @@ def split_airways_from_lungmask(src_image, lung_mask):
     masked_image = sitk.Mask(clipped, lung_mask)
     thresh_image = sitk.OtsuMultipleThresholds(masked_image, numberOfThresholds=4, numberOfHistogramBins=256)
     airways = sitk.Equal(thresh_image, 0)
-    airways = get_biggest_object(airways)
+    airways = get_largest_object(airways)
     airways = sitk.Cast(airways, 1)
     inverse_airways = sitk.Not(airways)
     lungmask_noair = sitk.And(lung_mask, inverse_airways)
@@ -1050,7 +1050,7 @@ def get_overlap_stats(lung_pred, lung_label):
 
 def get_bounds(mask):
     """Get the corners of the bounding box/cube for the given mask
-    
+
     Note
     ----
     This assumes the background value is 0
@@ -1235,26 +1235,8 @@ def get_distance_metrics(label_image, pred_image, label=None):
     return results
 
 
-def add_label_to_empty(label1, label2):
-    """Add a new binary label to an existing one
-
-     Parameters
-     ----------
-     label1 : sitk.Image
-        The base label to add things to - can have multiple values
-    label2 : sitk.Image
-        The new label to add to the base - must have values in [0, 1]
-     """
-    arr1 = sitk.GetArrayViewFromImage(label1)
-    arr2 = sitk.GetArrayViewFromImage(label2)
-    new_label = arr1.max() + 1
-    result = np.where(arr1 == 0, arr2 * new_label, arr1)
-    result_label = sitk.GetImageFromArray(result)
-    result_label.CopyInformation(label1)
-    return result_label
-
-
 def zeros_like(image, dtype=None):
+    #TODO - differentiate this from the SmartImage method
     if not isinstance(image, dict):
         image = get_sampling_info(image)
     if dtype is not None:
@@ -1311,7 +1293,7 @@ def remove_small_items(label_img, min_size=20):
     for label in labels:
         changes[label] = 0 if lfilter.GetNumberOfPixels(label) < min_size else 1
     result = sitk.ChangeLabel(components, changeMap=changes)
-    return result
+    return sitk.Cast(result, label_img.GetPixelID())
 
 
 def get_total_hull(arr):
@@ -1341,7 +1323,8 @@ def get_label_hull(label):
         result[slice_idx] = get_total_hull(arr[slice_idx])
     result_img = sitk.GetImageFromArray(result)
     result_img.CopyInformation(label)
-    return result_img    
+    return result_img
+
 
 @wrap_numpy2numpy
 def argmax(image, axis=-1, return_type=np.uint8):
@@ -1350,6 +1333,7 @@ def argmax(image, axis=-1, return_type=np.uint8):
 
 def get_unique_labels(image, bg_val=-1):
     # NOTE: Assumes there is at least some background with value 0
+    image = SmartImage(image).sitk_image
     label_filt = sitk.LabelShapeStatisticsImageFilter()
     label_filt.SetBackgroundValue(bg_val)
     label_filt.SetComputePerimeter(False)
@@ -1373,11 +1357,11 @@ def get_num_objects(label, min_size=0, bg_val=0):
         if label_filt.GetPhysicalSize(label_idx) >= min_size:
             count += 1
     return count
-    
+
 
 def cast_to_smallest_dtype(image: Union[sitk.Image, SmartImage]) -> sitk.Image:
     """Convert an image to the smallest integer dtype based on min/max values
-    
+
     NOTE
     ----
     This will always truncate floating point values
@@ -1399,7 +1383,7 @@ def cast_to_smallest_dtype(image: Union[sitk.Image, SmartImage]) -> sitk.Image:
             dtype = item
             break
     else:
-        raise ValueError('Unable to find proper dtype - this should never happen')        
+        raise ValueError('Unable to find proper dtype - this should never happen')
     #     unsigned = False
     #     if minimum >= np.iinfo(np.int8) and maximum <= np.iinfo(np.int8):
     #         dtype = 'int8'
@@ -1426,7 +1410,7 @@ def get_value_range(image: sitk.Image) -> Tuple[float, float]:
 
 def check_small_diff(img1: sitk.Image, img2: sitk.Image, threshold: float=1e-4, spec_thresholds: Optional[dict]=None, verbose: bool=True) -> bool:
     """Check whether differences in image size, spacing, or origin pass a defined threshold
-    
+
     Parameters
     ----------
     img1: sitk.Image
@@ -1439,11 +1423,11 @@ def check_small_diff(img1: sitk.Image, img2: sitk.Image, threshold: float=1e-4, 
         An optional dict with metrics as keys and metric-specific thresholds as values (the default is None)
     verbose: bool
         Whether to give a summary of any differences found (the default is True)
-        
+
     Returns
     -------
     all_check: bool
-        Returns true if any differences passed the thresholds    
+        Returns true if any differences passed the thresholds
     """
     if spec_thresholds is None:
         spec_thresholds = {}
@@ -1491,17 +1475,139 @@ def histeresis_threshold(prob_map, lower_thresh, peak_thresh, min_peak_size=100)
             remap[label_idx] = 1
     result = sitk.ChangeLabel(lower_cc, changeMap=remap)
     return sitk.Cast(result, sitk.sitkUInt8)
-        
+
+
 def check_label_on_border(image: Union[sitk.Image, SmartImage]):
     if isinstance(image, SmartImage):
         image = image.sitk_image
-        
+
     filt = sitk.LabelShapeStatisticsImageFilter()
     filt.SetBackgroundValue(0)
     filt.ComputePerimeterOn()
     filt.Execute(image)
-    
+
     results = {}
     for label in filt.GetLabels():
         results[label] = filt.GetPerimeterOnBorder(label) > 0
     return results
+
+
+def add_to_empty(base_image: ImageType, add_image: ImageType, bg_val: float = 0) -> ImageType:
+    """Add values from one label only to background regions of a base label
+
+    Parameters
+    ----------
+    base_image : ImageType
+        The label to add values to
+    add_image : ImageType
+        The label containing new values
+    bg_val : float, optional
+        The background value, by default 0
+
+    Returns
+    -------
+    ImageType
+        The result image with new values added to the bg of the base image
+    """
+    # TODO - can this be done without the inversion?
+    src_type = get_image_type(base_image)
+    base_image = as_image(base_image)
+    add_image = as_image(add_image)
+    inverse = (base_image == bg_val).astype(base_image.dtype)
+    result = base_image + (add_image * inverse)
+    if src_type == 'itk':
+        return result.itk_image
+    elif src_type == 'sitk':
+        return result.sitk_image
+    else:
+        return result
+
+
+def compare_relabel(label: SmartImage, neighbor: SmartImage) -> Tuple[SmartImage, SmartImage, bool, int]:
+    """Reassign pieces of label to neighbor if they are not the largest label object and are touching neighbor
+
+    Parameters
+    ----------
+    label : SmartImage
+        The label that should only have 1 object
+    neighbor : SmartImage
+        A potentially neighboring label to the first
+    """
+    full_size = label.sum()
+    objects = sitk.ConnectedComponent(label.sitk_image)
+    filt = sitk.LabelShapeStatisticsImageFilter()
+    filt.SetComputeFeretDiameter(False)
+    filt.SetComputeOrientedBoundingBox(False)
+    filt.SetComputePerimeter(False)
+    filt.Execute(objects)
+    mapper = {}
+    remaining_obj = filt.GetNumberOfLabels()
+    changed_neighbor = False
+    for idx in filt.GetLabels():
+        if filt.GetNumberOfPixels(idx) >= full_size * 0.5:
+            mapper[idx] = 1
+            continue
+        merged = neighbor + (objects == idx)
+        merged_cc = SmartImage(sitk.ConnectedComponent(merged.sitk_image))
+        if merged_cc.max() == 1:
+            mapper[idx] = 2
+            remaining_obj -= 1
+            changed_neighbor = True
+        else:
+            mapper[idx] = 0
+            remaining_obj -= 1
+    remapped = sitk.Cast(sitk.ChangeLabel(objects, changeMap=mapper), sitk.sitkUInt8)
+    result_label = SmartImage(remapped == 1).astype('uint8')
+    neighbor = neighbor + (remapped == 2)
+    return result_label, neighbor, changed_neighbor, remaining_obj
+
+
+def correct_labels(label_img: SmartImage, confusion_groups: list, multiobject_labels: list) -> SmartImage:
+    """Correct label objects based on potential confusion groups and known multi-object labels
+
+    Parameters
+    ----------
+    label_img : SmartImage
+        The label image to correct
+    confusion_groups : list
+        A group of lists where each list is a set of labels that could be confused for eachother
+    multiobject_labels : list
+        A list of labels that are allowed to have multiple objects
+
+    Note
+    ----
+    This is for errors where a piece of one contiguous object is mis-labeled as another class or where a
+    class that should only have a single labeled object has multiple occurences. In the first case, the
+    erroneous piece will be reassigned to a touching object in the same confusion group. In the second
+    case, only the largest object will be preserved.
+
+    #TODO - this can be improved to do all comparisons in one pass
+    """
+    confusion_lookup = {}
+    for group in confusion_groups:
+        for item in group:
+            confusion_lookup.setdefault(item, []).extend([subitem for subitem in group if subitem != item])
+    labels = get_unique_labels(label_img)
+    for idx in labels:
+        num_objects = get_num_objects(label_img == idx)
+        if idx in multiobject_labels:
+            continue
+        elif idx in confusion_lookup and num_objects > 1:
+            temp = label_img == idx
+            label_img = SmartImage(sitk.ChangeLabel(label_img.sitk_image, changeMap={idx: 0}))
+            remaining_obj = np.Inf
+            for neighbor_idx in confusion_lookup[idx]:
+                temp, neighbor, changed_neighbor, remaining_obj = compare_relabel(temp, label_img == neighbor_idx)
+                if changed_neighbor:
+                    label_img = SmartImage(sitk.ChangeLabel(label_img.sitk_image, changeMap={neighbor_idx: 0, idx: 0}))
+                    label_img = label_img + neighbor * neighbor_idx
+                if remaining_obj == 1:
+                    break
+            else:
+                if remaining_obj > 1:
+                    temp = SmartImage(get_largest_object(temp.sitk_image))
+            label_img = label_img + temp * idx
+        else:
+            if num_objects != 1:
+                print('Found {} for idx {}, expected 1'.format(num_objects, idx))
+    return label_img
