@@ -2,14 +2,13 @@ import glob
 # import importlib
 import os
 import warnings
-from typing import Any, List, Optional, Union
+from typing import List, Optional, Union
 
 import gouda
 import numpy as np
 import SimpleITK as sitk
 
-from .constants import (DTYPE_MATCH_ITK, DTYPE_MATCH_NP2SITK, DTYPE_STRING,
-                        SmartType)
+from .constants import SmartType
 
 try:
     # raise ImportError()
@@ -17,7 +16,7 @@ try:
     ITK_AVAILABLE = True
 except ImportError:
     class DummyModule:
-        #TODO: Come up with a better way to handle missing itk
+        # TODO: Come up with a better way to handle missing itk
         def __init__(self):
             self.Image = None
             self.SubtractImageFilter = None
@@ -776,7 +775,7 @@ class SmartImage(object):
         if self.image_type == 'sitk':
             if isinstance(other, SmartImage):  # unwrap other as-needed
                 other = other.sitk_image
-            return SmartImage(image.__lt__(other.sitk_image))
+            return SmartImage(image.__lt__(other))
         elif self.image_type == 'itk':
             raise ValueError("Comparison operators are not supported yet for itk")
         else:
@@ -793,7 +792,7 @@ class SmartImage(object):
         if self.image_type == 'sitk':
             if isinstance(other, SmartImage):  # unwrap other as-needed
                 other = other.sitk_image
-            return SmartImage(image.__ne__(other.sitk_image))
+            return SmartImage(image.__ne__(other))
         elif self.image_type == 'itk':
             raise ValueError("Comparison operators are not supported yet for itk")
         else:
@@ -884,7 +883,7 @@ class SmartImage(object):
 ImageType = Union[SmartImage, itk.Image, sitk.Image]
 
 
-def to_image(image: Union[itk.Image, sitk.Image, SmartImage, np.ndarray]) -> SmartImage:
+def as_image(image: Union[itk.Image, sitk.Image, SmartImage, np.ndarray]) -> SmartImage:
     """Wrap an image as a SmartImage"""
     if not isinstance(image, SmartImage):
         return SmartImage(image)

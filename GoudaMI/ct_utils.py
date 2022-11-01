@@ -843,20 +843,20 @@ def get_distances(image_1, image_2, sampling=1, connectivity=1):
     return np.concatenate([np.ravel(dta[surf_2 != 0]), np.ravel(dtb[surf_1 != 0])])
 
 
-def get_largest_object(label: ImageType, n_objects: int = 1) -> ImageType:
+def get_largest_object(image: ImageType, n_objects: int = 1) -> ImageType:
     """Remove all but the largest n objects from a label
 
     Parameters
     ----------
-    label : ImageType
-        The label to evaluate
+    image : ImageType
+        The binary label image to evaluate
     n_objects : int, optional
         The number of objects to preserve, by default 1
     """
-    image_type = get_image_type(label)
+    image_type = get_image_type(image)
     if image_type != 'sitk':
-        label = as_image(label).sitk_image
-    components = sitk.ConnectedComponent(label)
+        image = as_image(image).sitk_image
+    components = sitk.ConnectedComponent(image)
     lfilter = sitk.LabelShapeStatisticsImageFilter()
     lfilter.Execute(components)
     label_sizes = [[lfilter.GetNumberOfPixels(label), label] for label in lfilter.GetLabels()]
@@ -865,7 +865,7 @@ def get_largest_object(label: ImageType, n_objects: int = 1) -> ImageType:
     for idx, (_, label) in enumerate(label_sizes):
         changes[label] = 1 if idx < n_objects else 0
     output = sitk.ChangeLabel(components, changeMap=changes)
-    output = sitk.Cast(output, label.GetPixelID())
+    output = sitk.Cast(output, image.GetPixelID())
     if image_type == 'smartimage':
         output = SmartImage(output)
     return output
@@ -1283,7 +1283,8 @@ def get_objects_within_range(binary_image, min_size=100, max_size=np.inf, merge_
 
 
 def remove_small_items(label_img, min_size=20):
-    if isinstance(label_img, SmartImage):
+    image_type = get_image_type(label_img)
+    if image_type == 'smartimage':
         label_img = label_img.sitk_image
     components = sitk.ConnectedComponent(label_img)
     lfilter = sitk.LabelShapeStatisticsImageFilter()
@@ -1292,8 +1293,12 @@ def remove_small_items(label_img, min_size=20):
     changes = {}
     for label in labels:
         changes[label] = 0 if lfilter.GetNumberOfPixels(label) < min_size else 1
-    result = sitk.ChangeLabel(components, changeMap=changes)
-    return sitk.Cast(result, label_img.GetPixelID())
+    component_mask = sitk.ChangeLabel(components, changeMap=changes)
+    result = label_img * sitk.Cast(component_mask, label_img.GetPixelID())
+    if image_type == 'smartimage':
+        return SmartImage(result)
+    else:
+        return result
 
 
 def get_total_hull(arr):
@@ -1513,7 +1518,8 @@ def add_to_empty(base_image: ImageType, add_image: ImageType, bg_val: float = 0)
     src_type = get_image_type(base_image)
     base_image = as_image(base_image)
     add_image = as_image(add_image)
-    inverse = (base_image == bg_val).astype(base_image.dtype)
+    inverse = (base_image == bg_val)
+    inverse.astype(base_image.dtype, in_place=True)
     result = base_image + (add_image * inverse)
     if src_type == 'itk':
         return result.itk_image
