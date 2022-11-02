@@ -1354,10 +1354,12 @@ def get_unique_labels(image, bg_val=-1):
     return np.array(label_filt.GetLabels())
 
 
-def get_num_objects(label, min_size=0, bg_val=0):
-    if not isinstance(label, SmartImage):
-        label = SmartImage(label)
-    label = label.sitk_image
+def get_num_objects(label: ImageType, min_size: float = 0, bg_val: float = 0):
+    label_type = get_image_type(label)
+    if label_type == 'smartimage':
+        label = label.sitk_image
+    elif label_type == 'itk':
+        label = as_image(label).sitk_image
     cc = sitk.ConnectedComponent(label)
     label_filt = sitk.LabelShapeStatisticsImageFilter()
     label_filt.SetBackgroundValue(bg_val)

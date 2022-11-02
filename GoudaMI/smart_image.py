@@ -522,6 +522,8 @@ class SmartImage(object):
         SimpleITK.LabelShapeStatisticsImageFilter
             A SimpleITK filter that has already calculated the label shape statistics
         """
+        if 'int' not in self.dtype:
+            raise TypeError(f'Integer pixel type required for LabelShapeStatistics filter (current: {self.dtype})')
         label_filt = sitk.LabelShapeStatisticsImageFilter()
         label_filt.SetBackgroundValue(bg_val)
         label_filt.SetComputePerimeter(perimeter)
@@ -551,8 +553,10 @@ class SmartImage(object):
         elif image_type == 'itk':
             self.__itk_image = image
             self.__updated_itk = True
+        elif image_type == 'smartimage':
+            return self.update(image.image)
         else:
-            raise TypeError('SmartImage must be updated with either itk.Image or SimpleITK.Image objects')
+            raise TypeError('SmartImage must be updated with itk.Image, SimpleITK.Image, or SmartImage objects')
         self.__reset_internals()
         return self
 
@@ -872,18 +876,23 @@ class SmartImage(object):
             if target_type == 'smartimage':
                 target = target.sitk_image
             result = sitk_op(image, target)
-            if isinstance(result, sitk.Image) and not in_place:
-                result = SmartImage(result)
-            return result
         elif self.image_type == 'itk':
             if target_type == 'smartimage':
                 target = target.itk_image
             result = itk_op(image, target)
-            if isinstance(result, itk.Image) and not in_place:
-                result = SmartImage(result)
-            return result
         else:
             raise ValueError('self.image is type {}'.format(type(image)))
+
+        result_type = get_image_type(result)
+        if result_type in ['sitk', 'itk', 'smartimage']:
+            if in_place:
+                return self.update(result)
+            else:
+                return as_image(result)
+        else:
+            if in_place:
+                warnings.warn('Could not update in-place as result is not an image type')
+            return result
 
     def __getitem__(self, key):
         image = self.image
