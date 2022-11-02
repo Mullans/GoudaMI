@@ -220,6 +220,7 @@ def mask_body(image, opening_size=1):
         bin_img = sitk.BinaryMorphologicalOpening(bin_img, [opening_size] * image.GetDimension(), sitk.sitkBall, 0, 1)
     labels = sitk.ConnectedComponent(bin_img)
     lfilter = sitk.LabelShapeStatisticsImageFilter()
+    lfilter.SetComputePerimeter(False)
     lfilter.Execute(labels)
     body_label = [-1, -1]
     for label in lfilter.GetLabels():
@@ -858,6 +859,7 @@ def get_largest_object(image: ImageType, n_objects: int = 1) -> ImageType:
         image = as_image(image).sitk_image
     components = sitk.ConnectedComponent(image)
     lfilter = sitk.LabelShapeStatisticsImageFilter()
+    lfilter.SetComputePerimeter(False)
     lfilter.Execute(components)
     label_sizes = [[lfilter.GetNumberOfPixels(label), label] for label in lfilter.GetLabels()]
     label_sizes = sorted(label_sizes, key=lambda x: x[0], reverse=True)
@@ -942,6 +944,7 @@ def segment_lungs(image, lower_threshold=-940, max_ratio=100, downscale=True):
     # Remove any stray components and close holes
     components = sitk.ConnectedComponent(lung_mask)
     lfilter = sitk.LabelShapeStatisticsImageFilter()
+    lfilter.SetComputePerimeter(False)
     lfilter.Execute(components)
     labels = lfilter.GetLabels()
     values = np.zeros(len(labels))
@@ -969,6 +972,7 @@ def segment_lungs(image, lower_threshold=-940, max_ratio=100, downscale=True):
 def lung_connected_components(image, max_ratio=100):
     components = sitk.ConnectedComponent(image)
     lfilter = sitk.LabelShapeStatisticsImageFilter()
+    lfilter.SetComputePerimeter(False)
     lfilter.Execute(components)
     labels = lfilter.GetLabels()
     values = np.zeros(len(labels))
@@ -1016,8 +1020,10 @@ def get_nodule_overlap_stats(lung_mask, nodule_mask):
     lung_mask = sitk.Greater(lung_mask, 0)
     nodule_labels = sitk.ConnectedComponent(nodule_mask)
     stats_filter = sitk.LabelShapeStatisticsImageFilter()
+    stats_filter.SetComputePerimeter(False)
     stats_filter.Execute(nodule_labels)
     nodule_stat = sitk.LabelShapeStatisticsImageFilter()
+    nodule_stat.SetComputePerimeter(False)
     results = []
     for label in stats_filter.GetLabels():
         nodule_pix = stats_filter.GetNumberOfPixels(label)
@@ -1266,6 +1272,7 @@ def get_objects_within_range(binary_image, min_size=100, max_size=np.inf, merge_
         raise ValueError('requires a SimpleITK.Image object')
     labels = sitk.ConnectedComponent(binary_image)
     lfilter = sitk.LabelShapeStatisticsImageFilter()
+    lfilter.SetComputePerimeter(False)
     lfilter.Execute(labels)
     relabel_map = {}
     idx = 1
@@ -1288,6 +1295,7 @@ def remove_small_items(label_img, min_size=20):
         label_img = label_img.sitk_image
     components = sitk.ConnectedComponent(label_img)
     lfilter = sitk.LabelShapeStatisticsImageFilter()
+    lfilter.SetComputePerimeter(False)
     lfilter.Execute(components)
     labels = lfilter.GetLabels()
     changes = {}
@@ -1542,8 +1550,6 @@ def compare_relabel(label: SmartImage, neighbor: SmartImage) -> Tuple[SmartImage
     full_size = label.sum()
     objects = sitk.ConnectedComponent(label.sitk_image)
     filt = sitk.LabelShapeStatisticsImageFilter()
-    filt.SetComputeFeretDiameter(False)
-    filt.SetComputeOrientedBoundingBox(False)
     filt.SetComputePerimeter(False)
     filt.Execute(objects)
     mapper = {}

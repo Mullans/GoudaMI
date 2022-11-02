@@ -501,7 +501,35 @@ class SmartImage(object):
             raise ValueError('Should never be here')
         return self
 
-    #TODO - allow setting each physical value
+    # TODO - allow setting each physical value
+
+    def label_shape_stats(self, bg_val: float = 0, perimeter: bool = False, feret_diameter: bool = False, oriented_bounding_box: bool = False) -> sitk.LabelShapeStatisticsImageFilter:
+        """Create, execute, and return a :class:`SimpleITK.LabelShapeStatisticsImageFilter`
+
+        Parameters
+        ----------
+        bg_val : float, optional
+            The background value of the label image, by default 0
+        perimeter : bool, optional
+            Whether to compute the label perimeters, by default False
+        feret_diameter : bool, optional
+            Whether to compute the maximum Feret diameter for labels, by default False
+        oriented_bounding_box : bool, optional
+            Whether to compute the oriented bounding box for labels, by default False
+
+        Returns
+        -------
+        SimpleITK.LabelShapeStatisticsImageFilter
+            A SimpleITK filter that has already calculated the label shape statistics
+        """
+        label_filt = sitk.LabelShapeStatisticsImageFilter()
+        label_filt.SetBackgroundValue(bg_val)
+        label_filt.SetComputePerimeter(perimeter)
+        label_filt.SetComputeFeretDiameter(feret_diameter)
+        label_filt.SetComputeOrientedBoundingBox(oriented_bounding_box)
+        label_filt.Execute(self.sitk_image)
+        self.__unique_labels = label_filt.GetLabels()
+        return label_filt
 
     def unique(self):
         if self.__unique_labels is None:
@@ -512,8 +540,8 @@ class SmartImage(object):
                 label_filt.SetBackgroundValue(-1)  # -1000 makes it lose labels sometimes?
             label_filt.SetComputePerimeter(False)
             label_filt.Execute(self.sitk_image)
-            self.labels = label_filt.GetLabels()
-        return self.labels
+            self.__unique_labels = label_filt.GetLabels()
+        return self.__unique_labels
 
     def update(self, image):
         image_type = get_image_type(image)
