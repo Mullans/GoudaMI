@@ -9,21 +9,17 @@ import gouda
 try:
     import itk
 except ImportError:
-    pass  # moved warning to __init__.py
-    # warnings.warn("Could not import ITK module - some methods may not work")
+    from .smart_image import itk  # Dummy module
 
 import numpy as np
 import scipy.ndimage
 import SimpleITK as sitk
 
 from . import io
-from .constants import SmartType, MIN_INTENSITY_PULMONARY_CT, MAX_INTENSITY_PULMONARY_CT
-from .convert import wrap_numpy2numpy, as_array, as_view
-from .smart_image import ImageType, ImageRefType, SmartImage, get_image_type, as_image, zeros_like
-
-MAX_INTENSITY = 500
-MIN_INTENSITY = -1000
-
+from .constants import MIN_INTENSITY_PULMONARY_CT, SmartType
+from .convert import as_view, wrap_numpy2numpy
+from .smart_image import (ImageRefType, ImageType, SmartImage, as_image,
+                          get_image_type, zeros_like)
 
 # NOTE - reference for some interfacing: https://github.com/SimpleITK/SimpleITK/blob/4aabd77bddf508c1d55519fbf6002180a08f9208/Wrapping/Python/Python.i#L764-L794
 
