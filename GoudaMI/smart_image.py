@@ -49,6 +49,8 @@ def get_image_type(image):
         return 'smartimage'
     elif 'vtkPolyData' in type_str:
         return 'vtk_polydata'
+    elif "<class 'dict'>":
+        return 'dict'
     else:
         return None
 
@@ -536,8 +538,9 @@ class SmartImage(object):
         self.__unique_labels = label_filt.GetLabels()
         return label_filt
 
-    def connected_components(self):
-        return self.apply()
+    def connected_components(self, fully_connected=False, in_place=False):
+        # TODO - add itk version, may need internal method to wrap filter
+        return self.__perform_op(sitk.ConnectedComponent, None, fully_connected, in_place=in_place)
 
     def unique(self):
         if self.__unique_labels is None:
@@ -857,7 +860,8 @@ class SmartImage(object):
         return self.__or__(other)
 
     def change_label(self, changeMap: dict, in_place: bool = False):
-        return self.__perform_op(sitk.ChangeLabel, None, changeMap, in_place)
+        # TODO - add itk version (may need a internal method to run a filter...)
+        return self.__perform_op(sitk.ChangeLabel, None, changeMap=changeMap, in_place=in_place)
 
     def __perform_op(self, sitk_op, itk_op, *args, in_place=False, **kwargs):
         """Perform the sitk/itk operation depending on the current image type
@@ -930,6 +934,7 @@ class SmartImage(object):
 
 
 ImageType = Union[SmartImage, itk.Image, sitk.Image]
+ImageRefType = Union[SmartImage, itk.Image, sitk.Image, dict, sitk.ImageFileReader]
 
 
 def as_image(image: Union[itk.Image, sitk.Image, SmartImage, np.ndarray]) -> SmartImage:

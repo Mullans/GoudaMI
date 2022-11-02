@@ -11,9 +11,34 @@ import numpy as np
 import SimpleITK as sitk
 import vtk
 
-from .smart_image import SmartImage
+from .smart_image import SmartImage, get_image_type, ImageType
+# TODO - create wrap4XXX for itk, sitk, and vtk to take any format, convert to chosen, and return as original format
 
-#TODO - create wrap4XXX for itk, sitk, and vtk to take any format, convert to chosen, and return as original format
+
+def as_array(image: ImageType) -> np.ndarray:
+    image_type = get_image_type(image)
+    if image_type == 'sitk':
+        image = sitk.GetArrayFromImage(image)
+    elif image_type == 'itk':
+        image = itk.GetArrayFromImage(image)
+    elif image_type == 'smartimage':
+        image = image.as_array()
+    else:
+        image = np.asarray(image)
+    return image
+
+
+def as_view(image: ImageType) -> np.ndarray:
+    image_type = get_image_type(image)
+    if image_type == 'sitk':
+        image = sitk.GetArrayViewFromImage(image)
+    elif image_type == 'itk':
+        image = itk.GetArrayViewFromImage(image)
+    elif image_type == 'smartimage':
+        image = image.as_view()
+    else:
+        image = np.asarray(image)
+    return image
 
 
 def wrap4itk(func):
@@ -80,9 +105,9 @@ def wrap_numpy2numpy(func):
             return_type = 'array'
         else:
             raise ValueError('Unknown image type: {}'.format(type(image)))
-        
+
         arr = func(arr, *args, **kwargs)
-        
+
         if return_type.endswith('sitk'):
             return_image = sitk.GetImageFromArray(arr)
             return_image.CopyInformation(image)
@@ -93,7 +118,7 @@ def wrap_numpy2numpy(func):
             return_image.SetSpacing(image.GetSpacing())
         if return_type.startswith('smart'):
             return_image = SmartImage(return_image, default_type=return_type[5:])
-            
+
         return return_image
     return wrapped_func
 
@@ -114,7 +139,7 @@ def wrap_sitk(func):
             image = sitk.GetImageFromArray(image)
         else:
             raise ValueError('Unknown image type: {}'.format(type(image)))
-    
+
         return func(image, *args, **kwargs)
     return wrapped_func
 
@@ -210,7 +235,7 @@ def images2series(images):
 
 def plastimatch_rt_to_nifti(rt_path: os.PathLike, dicom_path: os.PathLike, dst_path: os.PathLike, image_dst_path: Optional[os.PathLike]=None, post_check: bool=False, verbose: bool=True) -> str:
     """Convert an rt_struct file to a nifti file using plastimatch
-    
+
     Parameters
     ----------
     rt_path: str
@@ -224,7 +249,7 @@ def plastimatch_rt_to_nifti(rt_path: os.PathLike, dicom_path: os.PathLike, dst_p
     post_check: bool
         Whether to do a post-processing check to ensure single channel labels (the default is False)
     verbose: bool
-        Whether to print warnings during execution (the default is True) 
+        Whether to print warnings during execution (the default is True)
     Returns
     -------
     result_string: str
@@ -233,12 +258,12 @@ def plastimatch_rt_to_nifti(rt_path: os.PathLike, dicom_path: os.PathLike, dst_p
     plastimatch_path = shutil.which('plastimatch')
     if plastimatch_path is None:
         raise ImportError('Could not find the plastimatch executable - see http://plastimatch.org/getting_started.html for installation help')
-    
+
     if not os.path.exists(dicom_path):
         raise ValueError('Could not find reference dicom at: {}'.format(dicom_path))
     # print(f"plastimatch convert --input {rt_path} --output-ss-img {dst_path} --referenced-ct {dicom_path}")
     result = subprocess.run([
-        'plastimatch', 'convert', 
+        'plastimatch', 'convert',
         '--input', rt_path,
         '--output-ss-img', dst_path,
         '--referenced-ct', dicom_path,
@@ -252,7 +277,7 @@ def plastimatch_rt_to_nifti(rt_path: os.PathLike, dicom_path: os.PathLike, dst_p
     elif 'Setting PIH from RDD' not in result_string:
         if verbose:
             warnings.warn('rt_struct converted without referencing dicom - see result string for details')
-    
+
     if post_check:
         dst_path = str(dst_path)
         file_reader = sitk.ImageFileReader()
@@ -267,7 +292,7 @@ def plastimatch_rt_to_nifti(rt_path: os.PathLike, dicom_path: os.PathLike, dst_p
             union_label = functools.reduce(sitk.Or, split_img)
             # sitk.WriteImage(union_label, dst_path.replace('.nii.gz', '_union.nii.gz'))
             sitk.WriteImage(union_label, dst_path)  # should just overwrite the vector version
-    
+
     if image_dst_path is not None:
         if os.path.exists(image_dst_path):
             if verbose:

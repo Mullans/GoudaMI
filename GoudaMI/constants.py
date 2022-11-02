@@ -3,6 +3,12 @@ import importlib
 import numpy as np
 import SimpleITK as sitk
 
+
+# UI-Lung uses (-1024, 1024), Nvidia uses (-1000, 500)
+MIN_INTENSITY_PULMONARY_CT = -1000
+MAX_INTENSITY_PULMONARY_CT = 500
+
+
 check_itk = importlib.util.find_spec('itk')
 if check_itk is None:
     DTYPE_MATCH_ITK = {}

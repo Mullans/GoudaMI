@@ -2,7 +2,7 @@ import glob
 import os
 import warnings
 from collections.abc import Iterable
-from typing import List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
 import gouda
 
@@ -17,9 +17,9 @@ import scipy.ndimage
 import SimpleITK as sitk
 
 from . import io
-from .constants import SmartType
-from .convert import wrap_numpy2numpy
-from .smart_image import ImageType, SmartImage, get_image_type, as_image
+from .constants import SmartType, MIN_INTENSITY_PULMONARY_CT, MAX_INTENSITY_PULMONARY_CT
+from .convert import wrap_numpy2numpy, as_array, as_view
+from .smart_image import ImageType, ImageRefType, SmartImage, get_image_type, as_image, zeros_like
 
 MAX_INTENSITY = 500
 MIN_INTENSITY = -1000
@@ -28,8 +28,8 @@ MIN_INTENSITY = -1000
 # NOTE - reference for some interfacing: https://github.com/SimpleITK/SimpleITK/blob/4aabd77bddf508c1d55519fbf6002180a08f9208/Wrapping/Python/Python.i#L764-L794
 
 
-def quick_save(data, label=None, skip_existing_filenames=False):
-    """Quickly save an image/label in the notebooks' scratch folder
+def quick_save(data: Any, label=None, skip_existing_filenames=False):
+    """Quickly save an image/label in the project's scratch folder
 
     Parameters
     ----------
@@ -40,7 +40,7 @@ def quick_save(data, label=None, skip_existing_filenames=False):
     skip_existing_filenames: bool
         Whether to skip saving the file if the label is already taken (the default is False)
     """
-    scratch_dir = gouda.GoudaPath(os.getcwd() + '/scratch')
+    scratch_dir = gouda.GoudaPath(os.getcwd() + '/scratch').ensure_dir()
     gouda.ensure_dir(scratch_dir)
     if label is None:
         label = 'default'
@@ -88,38 +88,26 @@ def quick_save(data, label=None, skip_existing_filenames=False):
             raise ValueError("Unidentified data type")
 
 
-def clip_image(image, low=MIN_INTENSITY, high=MAX_INTENSITY):
+def clip_image(image: ImageType, low: float, high: float):
     """Clip the intensity values in the image to a given range.
-
-    Parameters
-    ----------
-    image : SimpleITK.Image
-        The image to clip
-    low: int
-        The minimum value to use (the default is -1000)
-    high: int
-        The maximum value to use (the default is 500)
-
-    NOTE: UI-Lung values: [-1024, 1024], NVidia Lung Values [-1000, 500]"""
-    if isinstance(image, SmartImage):
-        image = image.sitk_image
-    # image = sitk.Threshold(image, -32768, high, high)
-    # image = sitk.Threshold(image, low, high, low)
-    return sitk.IntensityWindowing(image, low, high, low, high)
-    return image
-
-
-def body_binary_thresh(img, min_val=-500, max_val=2000):
-    """Threshold a CT to best show the body vs background.
-
-    NOTE: These min/max values are for thresholding the body, not the lungs"""
-    bin_filter = sitk.BinaryThresholdImageFilter()
-    bin_filter.SetOutsideValue(0)
-    bin_filter.SetInsideValue(1)
-    bin_filter.SetLowerThreshold(min_val)
-    bin_filter.SetUpperThreshold(max_val)
-    bin_img = bin_filter.Execute(img)
-    return bin_img
+    """
+    image_type = get_image_type(image)
+    if image_type == 'smartimage':
+        return image.window(min=low, max=high)
+    elif image_type == 'sitk':
+        return sitk.IntensityWindowing(image, low, high, low, high)
+    elif image_type == 'itk':
+        filter = itk.IntensityWindowingImageFilter.New(image)
+        filter.SetInput(image)
+        filter.SetOutputMaximum(max)
+        filter.SetOutputMinimum(min)
+        filter.SetWindowMaximum(max)
+        filter.SetWindowMinimum(min)
+        filter.Update()
+        result = filter.GetOutput()
+        return result
+    else:
+        raise TypeError('Unknown image type: {}'.format(type(image)))
 
 
 def quick_open(img, radius=3):
@@ -212,8 +200,9 @@ def fill_slices(arr, dilate=0, erode=0, axis=0):
 
 def mask_body(image, opening_size=1):
     """Generate a mask of the body in a 3D CT"""
-    if not isinstance(image, sitk.Image):
-        raise ValueError("mask_body requires a SimpleITK.Image object")
+    image_type = get_image_type(image)
+    if image_type != 'sitk':
+        image = as_image(image).sitk_image
     bin_img = sitk.RecursiveGaussian(image, 3)
     bin_img = sitk.BinaryThreshold(bin_img, -500, 10000, 1, 0)
     if opening_size > 0:
@@ -230,18 +219,24 @@ def mask_body(image, opening_size=1):
     bin_img = sitk.Equal(labels, body_label[0])
     bin_img = sitk.BinaryMorphologicalClosing(bin_img, [3] * image.GetDimension(), sitk.sitkBall, 1)
     filled_labels = fill2d(bin_img)
+    if image_type != 'sitk':
+        filled_labels = as_image(filled_labels)
+        if image_type == 'numpy':
+            filled_labels = filled_labels.as_array()
+        elif image_type == 'itk':
+            filled_labels = filled_labels.itk_image
     return filled_labels
 
 
 def faster_mask_body(image, resample=True):
     # Note - rounding error may cut off the top slice during resampling
-    src_image = image
+    image_type = get_image_type(image)
+    sampling_info = get_sampling_info(image)
     if resample:
         image = resample_iso_by_slice_size(image, 128, interp=sitk.sitkLinear)
     median_filter = sitk.MedianImageFilter()
     median_filter.SetRadius(3)
     image = median_filter.Execute(image)
-    # bin_img = sitk.Greater(image, -500)
     bin_img = sitk.BinaryThreshold(image, -500, 10000, 1, 0)
     labels = sitk.ConnectedComponent(bin_img)
     lfilter = sitk.LabelShapeStatisticsImageFilter()
@@ -256,19 +251,20 @@ def faster_mask_body(image, resample=True):
     bin_img = sitk.BinaryFillhole(bin_img)
     bin_img = sitk.Crop(bin_img, [0, 0, 1], [0, 0, 1])
     if resample:
-        bin_img = resample_to_ref(bin_img, src_image, interp=sitk.sitkNearestNeighbor, outside_val=0)
+        bin_img = resample_to_ref(bin_img, sampling_info, interp=sitk.sitkNearestNeighbor, outside_val=0)
+    if image_type != 'sitk':
+        bin_img = as_image(bin_img)
+        if image_type == 'numpy':
+            bin_img = bin_img.as_array()
+        elif image_type == 'itk':
+            bin_img = bin_img.itk_image
     return bin_img
 
 
-def remove_background(image, mask):
-    return sitk.Mask(image, mask, outsideValue=MIN_INTENSITY, maskingValue=0)
-
-
-def crop_image_to_mask(image, mask=None, crop_z=False, crop_quantile=50, return_bounds=False):
+def crop_image_to_mask(image: ImageType, mask: Optional[Union[ImageType, np.ndarray]] = None, crop_z=False, crop_quantile=50, return_bounds=False):
     if mask is None:
         mask = mask_body(image)
-    elif isinstance(mask, sitk.Image):
-        mask = sitk.GetArrayFromImage(mask)
+    mask = as_view(mask)
 
     front_view = mask.max(axis=1)
     side_view = mask.max(axis=2)
@@ -343,44 +339,8 @@ def crop_image_to_mask(image, mask=None, crop_z=False, crop_quantile=50, return_
     return cropped
 
 
-def clean_segmentation(lung_image, lung_threshold=0.1, body_mask=None):
-    import skimage.measure
-    if isinstance(lung_image, sitk.Image):
-        source_arr = sitk.GetArrayFromImage(lung_image)
-    else:
-        source_arr = np.copy(lung_image)
-    if body_mask is not None:
-        source_arr[~body_mask.astype(np.bool)] = 0
-    if 'float' in str(source_arr.dtype):
-        lung_arr = source_arr > lung_threshold
-    else:
-        lung_arr = source_arr
-
-    labels = skimage.measure.label(lung_arr, connectivity=1, background=0)
-    new_labels = np.zeros_like(lung_arr)
-    bins = np.bincount(labels.flat)
-    pos_lungs = (np.argwhere(bins[1:] > 100000) + 1).flatten()
-    if len(pos_lungs) > 2:
-        raise ValueError('Too Many Lungs')
-    elif len(pos_lungs) == 1:
-        warnings.warn('Only single segmented object detected')
-        lungs = pos_lungs[0]
-        new_labels[labels == lungs] = source_arr[labels == lungs]
-    elif len(pos_lungs) == 2:
-        lung1, lung2 = pos_lungs
-        new_labels[labels == lung1] = source_arr[labels == lung1]
-        new_labels[labels == lung2] = source_arr[labels == lung2]
-    else:
-        raise ValueError('No segmentated objects found')
-    if isinstance(lung_image, sitk.Image):
-        clean_image = sitk.GetImageFromArray(new_labels)
-        clean_image.CopyInformation(lung_image)
-        return clean_image
-    return new_labels
-
-
-def resample_iso_by_slice_size(image, output_size, outside_val=MIN_INTENSITY, interp=sitk.sitkBSpline, presmooth=False):
-    """Resample an image to a given slice size and enforce equal spacing in all dimensions"""
+def resample_iso_by_slice_size(image, output_size, outside_val=MIN_INTENSITY_PULMONARY_CT, interp=sitk.sitkBSpline, presmooth=False):
+    """Resample an image to isotropic spacing based on a given slice size"""
     if presmooth:
         image = sitk.RecursiveGaussian(image, 3)
 
@@ -408,11 +368,30 @@ def resample_iso_by_slice_size(image, output_size, outside_val=MIN_INTENSITY, in
     return resampled_image
 
 
-def resample_to_ref(im, ref, outside_val=0, interp=sitk.sitkNearestNeighbor):
-    """Resample an image to match a reference image"""
+def resample_to_ref(image: ImageType, ref: ImageRefType, outside_val: float = 0, interp: int = sitk.sitkNearestNeighbor) -> ImageType:
+    """Resample an image to match a reference image
+
+    Parameters
+    ----------
+    image : ImageType
+        The image to resample
+    ref : ImageRefType
+        The reference to get physical parameters from
+    outside_val : float, optional
+        The outside value of the image, by default 0
+    interp : int, optional
+        The interpolator to use, by default sitk.sitkNearestNeighbor
+
+    Raises
+    ------
+    ValueError
+        Raised if the reference object is not an ImageType, dict, or SimpleITK.ImageFileReader
+    """
     resampleFilter = sitk.ResampleImageFilter()
     resampleFilter.SetInterpolator(interp)
     resampleFilter.SetDefaultPixelValue(outside_val)
+    if isinstance(ref, itk.Image):
+        ref = as_image(ref)
     if isinstance(ref, sitk.Image):
         resampleFilter.SetReferenceImage(ref)
     elif isinstance(ref, (sitk.ImageFileReader)):
@@ -432,7 +411,7 @@ def resample_to_ref(im, ref, outside_val=0, interp=sitk.sitkNearestNeighbor):
         resampleFilter.SetOutputDirection(ref.GetDirection())
     else:
         raise ValueError("Unknown reference type: '{}'".format(type(ref)))
-    resampleIm = resampleFilter.Execute(im)
+    resampleIm = resampleFilter.Execute(image)
     return resampleIm
 
 
@@ -518,7 +497,7 @@ def compare_physical(image1, image2):
 
 
 def compare_dicom_images(dicom_path1, dicom_path2):
-    """Compare two dicom images and print out any differences"""
+    """Compare two dicom images and print out any differences in metadata"""
     image1, reader1 = io.read_dicom_as_sitk(dicom_path1)
     image2, reader2 = io.read_dicom_as_sitk(dicom_path2)
     found_diff = False
@@ -576,7 +555,7 @@ def get_scaled_sampling_info(src_image, scaling_factor=0.5):
             'direction': src_image.GetDirection()}
 
 
-def apply_scaling(src_image, scaling_factor=0.5, scaling_template=None, outside_val=0.0, interp=sitk.sitkLinear):
+def resample_rescale(src_image, scaling_factor=0.5, scaling_template=None, outside_val=0.0, interp=sitk.sitkLinear):
     """Simple rescaling by a constant factor in each dimension.
 
     Parameters
@@ -638,6 +617,9 @@ def copy_meta_from_ref(image, ref):
 
 
 def padded_resize(image, size, background_value=0):
+    image_type = get_image_type(image)
+    if image_type != 'sitk':
+        image = as_image(image).sitk_image
     cur_x, cur_y, cur_z = image.GetSize()
     if len(size) == 2:
         size = [size[0], size[1], cur_z]
@@ -651,52 +633,12 @@ def padded_resize(image, size, background_value=0):
     # if background_value is None:
     #     background_value, _ = get_image_range(image)
 
-    return sitk.ConstantPad(image,
-                            [lower_x, lower_y, lower_z],
-                            [upper_x, upper_y, upper_z],
-                            background_value)
-
-
-def resample_to_isocube(image, output_size=300, interp=sitk.sitkBSpline, outside_val=MIN_INTENSITY):
-    """Resize an image to have equal spacing and sizing in each axis, and pad
-    with background value to preserve aspect ratio"""
-    input_size = image.GetSize()
-    input_spacing = image.GetSpacing()
-    input_origin = image.GetOrigin()
-    input_direction = image.GetDirection()
-
-    input_size = np.array(input_size)
-    input_spacing = np.array(input_spacing)
-
-    # resample isotropic
-    mid_size = (input_spacing * input_size) / input_spacing.min()
-    mid_spacing = input_spacing.min()
-
-    # get output size/spacing
-    output_spacing = (mid_spacing * mid_size.max()) / output_size
-    mid_size = ((input_spacing * input_size) / output_spacing).astype(np.int)
-    output_spacing = (input_spacing * input_size) / mid_size
-
-    resample_filter = sitk.ResampleImageFilter()
-    resample_filter.SetInterpolator(interp)
-    resample_filter.SetOutputDirection(input_direction)
-    resample_filter.SetOutputOrigin(input_origin)
-    resample_filter.SetOutputSpacing(output_spacing)
-    resample_filter.SetSize([int(s) for s in mid_size])
-    resample_filter.SetDefaultPixelValue(outside_val)
-    resampled_image = resample_filter.Execute(image)
-
-    cur_x, cur_y, cur_z = mid_size
-    lower_x = int((output_size - cur_x) // 2)
-    upper_x = int((output_size - cur_x) - lower_x)
-    lower_y = int((output_size - cur_y) // 2)
-    upper_y = int((output_size - cur_y) - lower_y)
-    lower_z = int((output_size - cur_z) // 2)
-    upper_z = int((output_size - cur_z) - lower_z)
-    lower_bounds = [lower_x, lower_y, lower_z]
-    upper_bounds = [upper_x, upper_y, upper_z]
-    resampled_image = sitk.ConstantPad(resampled_image, lower_bounds, upper_bounds, outside_val)
-    return resampled_image
+    result = sitk.ConstantPad(image,
+                              [lower_x, lower_y, lower_z],
+                              [upper_x, upper_y, upper_z],
+                              background_value)
+    if image_type == 'smartimage':
+        return SmartImage(result)
 
 
 def resample_to_unit_spacing(image, interp=sitk.sitkBSpline, outside_val=-1000, verbose=False):
@@ -723,7 +665,8 @@ def resample_to_unit_spacing(image, interp=sitk.sitkBSpline, outside_val=-1000, 
     return resampled_image
 
 
-def whatif(size, spacing, new_spacing=None, new_size=None):
+def resample_dryrun(size, spacing, new_spacing=None, new_size=None):
+    """Given a reference size/spacing and a desired size/spacing, return the new physical parameters"""
     size = np.array(size)
     spacing = np.array(spacing)
     if new_spacing is not None:
@@ -731,13 +674,13 @@ def whatif(size, spacing, new_spacing=None, new_size=None):
             new_spacing = [new_spacing, new_spacing, new_spacing]
         new_spacing = np.array(new_spacing)
         new_size = (size * spacing) / new_spacing
-        return new_size
+        return new_size, new_spacing
     elif new_size is not None:
         if len(new_size) == 2:
             new_size = list(new_size) + [size[-1]]
         new_size = np.array(new_size)
         new_spacing = (spacing * size) / new_size
-        return new_spacing
+        return new_size, new_spacing
     else:
         raise ValueError('Either new_spacing or new_size must not be None')
 
@@ -764,82 +707,15 @@ def read_meta(image_path):
     return file_reader
 
 
-def isocube_to_source(cube_path, cropped_path=None, original_path=None, label=None, outside_val=MIN_INTENSITY):
-    if cropped_path is None:
-        cropped_path = cube_path.replace('Isocubes', 'CroppedImages')
-        cropped_path = cropped_path.replace('SampledCubes', 'Images')
-    if original_path is None:
-        original_path = cube_path.replace('Isocubes', 'Images')
-        original_path = original_path.replace('SampledCubes', 'Images')
-    cube_image = sitk.ReadImage(cube_path)
-    crop_image = sitk.ReadImage(cropped_path)
-    original_image = sitk.ReadImage(original_path)
-
-    if label is None:
-        to_restore = cube_image
-        interp = sitk.sitkBSpline
-    else:
-        if isinstance(label, np.ndarray):
-            to_restore = sitk.GetImageFromArray(label)
-            to_restore.CopyInformation(cube_image)
-        interp = sitk.sitkNearestNeighbor
-
-    crop_size = crop_image.GetSize()
-    crop_space = crop_image.GetSpacing()
-    # crop_origin = crop_image.GetOrigin()
-    # crop_direction = crop_image.GetDirection()
-
-    cube_size = cube_image.GetSize()
-    # cube_space = cube_image.GetSpacing()
-
-    # Un-pad
-    input_spacing = np.array(crop_space)
-    input_size = np.array(crop_size)
-    output_size = np.array(cube_size)[0]
-
-    mid_size = (input_spacing * input_size) / input_spacing.min()
-    mid_spacing = input_spacing.min()
-
-    output_spacing = (mid_spacing * mid_size.max()) / 300
-    mid_size = ((input_spacing * input_size) / output_spacing).astype(np.int)
-    output_spacing = (input_spacing * input_size) / mid_size
-
-    cur_x, cur_y, cur_z = mid_size
-    lower_x = int((output_size - cur_x) // 2)
-    upper_x = int((output_size - cur_x) - lower_x)
-    lower_y = int((output_size - cur_y) // 2)
-    upper_y = int((output_size - cur_y) - lower_y)
-    lower_z = int((output_size - cur_z) // 2)
-    upper_z = int((output_size - cur_z) - lower_z)
-    lower_bounds = [lower_x, lower_y, lower_z]
-    upper_bounds = [upper_x, upper_y, upper_z]
-
-    xslice, yslice, zslice = [slice(lower_bounds[i], cube_size[i] - upper_bounds[i]) for i in range(3)]
-    to_restore = to_restore[xslice, yslice, zslice]
-
-    # Resample to crop space
-    upsampled = resample_to_ref(to_restore, crop_image, interp=interp, outside_val=outside_val)
-
-    # Un-Crop to original image
-    upsampled_origin = original_image.TransformPhysicalPointToIndex(upsampled.GetOrigin())
-    original_size = original_image.GetSize()
-    upsampled_size = upsampled.GetSize()
-
-    upper_bounds = [original_size[i] - upsampled_size[i] - upsampled_origin[i] for i in range(3)]
-    restored = sitk.ConstantPad(upsampled, upsampled_origin, upper_bounds, outside_val)
-    restored.CopyInformation(original_image)
-    return restored
-
-
-def get_surface(image, connectivity=1):
+def array_get_surface(image, connectivity=1):
     image = image.astype(np.bool)
     conn = scipy.ndimage.morphology.generate_binary_structure(image.ndim, connectivity)
     return image ^ scipy.ndimage.morphology.binary_erosion(image, conn)
 
 
-def get_distances(image_1, image_2, sampling=1, connectivity=1):
-    surf_1 = get_surface(image_1, connectivity=connectivity)
-    surf_2 = get_surface(image_2, connectivity=connectivity)
+def array_get_distances(image_1, image_2, sampling=1, connectivity=1):
+    surf_1 = array_get_surface(image_1, connectivity=connectivity)
+    surf_2 = array_get_surface(image_2, connectivity=connectivity)
     dta = scipy.ndimage.morphology.distance_transform_edt(~surf_1, sampling)
     dtb = scipy.ndimage.morphology.distance_transform_edt(~surf_2, sampling)
     return np.concatenate([np.ravel(dta[surf_2 != 0]), np.ravel(dtb[surf_1 != 0])])
@@ -875,7 +751,9 @@ def get_largest_object(image: ImageType, n_objects: int = 1) -> ImageType:
 
 
 def otsu_threshold(values, bins='auto'):
-    hist, bin_edges = np.histogram(values, bins=bins)
+    """Get the value to use for a single point otsu threshold given an image"""
+    values = as_view(values)
+    hist, bin_edges = np.histogram(values.ravel(), bins=bins)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
     weight1 = np.cumsum(hist)
     weight2 = np.cumsum(hist[::-1])[::-1]
@@ -889,125 +767,6 @@ def otsu_threshold(values, bins='auto'):
     return threshold
 
 
-def segment_lungs(image, lower_threshold=-940, max_ratio=100, downscale=True):
-    """Generate a segmentation mask for the lungs
-
-    Parameters
-    ----------
-    image : str or SimpleITK.Image
-        The thoracic CT image to segment or the path where it is stored
-    lower_threshold : int
-        The lower threshold for parenchymal tissue intensity - this helps differentiate air pockets from lung tissue (the default is -940)
-    max_ratio : int
-        The maximum ratio for the two lung sizes - this is used in case the lungs are not separated for the connected components step (the default is 100)
-    downscale : bool
-        If true, the image will be downscaled by half before segmentation to speed up the operation, but a full-size result will be returned (the default is False)
-    """
-    if isinstance(image, str):
-        image = io.read_image(image)
-    elif not isinstance(image, sitk.Image):
-        raise ValueError("image must either be a path to an image or a SimpleITK.Image")
-
-    image = sitk.Median(image)  # median filter in case of noise
-
-    if downscale:
-        src_image = image
-        image = sitk.RecursiveGaussian(image, 3)
-        image = apply_scaling(src_image, scaling_factor=0.5, interp=sitk.sitkBSpline)
-
-    # Mask out the background so only the body is left
-    body_mask = mask_body(image)
-
-    if False:
-        # Old Version
-        # Find the threshold between body and lung intensitites
-        clipped_image = clip_image(image)
-        image_arr = sitk.GetArrayFromImage(clipped_image)
-        bg_mask = 1 - sitk.GetArrayFromImage(body_mask)
-        masked_image = np.ma.array(image_arr, mask=bg_mask)
-        masked_values = masked_image.compressed()
-        best_thresh = otsu_threshold(masked_values)
-        del clipped_image
-        del image_arr
-        del masked_image
-
-        # Initial threshold of the lungs
-        thresh_image = sitk.BinaryThreshold(image, lower_threshold, best_thresh, 1, 0)
-        and_filter = sitk.AndImageFilter()
-        lung_mask = and_filter.Execute(body_mask, thresh_image)
-        lung_mask = sitk.BinaryMorphologicalOpening(lung_mask, 1, sitk.sitkBall)
-    else:
-        masked_image = sitk.Mask(image, body_mask)
-        thresh = sitk.OtsuMultipleThresholds(masked_image, numberOfThresholds=2, numberOfHistogramBins=256)
-        lung_mask = sitk.Equal(thresh, 0)
-        lung_mask = sitk.BinaryFillhole(lung_mask)
-
-    # Remove any stray components and close holes
-    components = sitk.ConnectedComponent(lung_mask)
-    lfilter = sitk.LabelShapeStatisticsImageFilter()
-    lfilter.SetComputePerimeter(False)
-    lfilter.Execute(components)
-    labels = lfilter.GetLabels()
-    values = np.zeros(len(labels))
-    for label in labels:
-        values[label - 1] = lfilter.GetNumberOfPixels(label)
-    keep_idx = np.argsort(values)[-2:]
-    if len(keep_idx) > 1:
-        ratio = values[keep_idx[0]] / values[keep_idx[1]]
-        if ratio > max_ratio:
-            keep_idx = [keep_idx[0]]
-        elif ratio < (1 / max_ratio):
-            keep_idx = [keep_idx[1]]
-    to_keep = [labels[i] for i in keep_idx]
-    changes = {label: 1 if label in to_keep else 0 for label in labels}
-    output = sitk.ChangeLabel(components, changeMap=changes)
-
-    if downscale:
-        output = sitk.BinaryMorphologicalClosing(output, 1, sitk.sitkBall)
-        output = apply_scaling(output, scaling_template=src_image, interp=sitk.sitkNearestNeighbor)
-    else:
-        output = sitk.BinaryMorphologicalClosing(output, 5, sitk.sitkBall)
-    return sitk.Cast(output, 1)
-
-
-def lung_connected_components(image, max_ratio=100):
-    components = sitk.ConnectedComponent(image)
-    lfilter = sitk.LabelShapeStatisticsImageFilter()
-    lfilter.SetComputePerimeter(False)
-    lfilter.Execute(components)
-    labels = lfilter.GetLabels()
-    values = np.zeros(len(labels))
-    for label in labels:
-        values[label - 1] = lfilter.GetNumberOfPixels(label)
-    keep_idx = np.argsort(values)[-2:]
-
-    if len(keep_idx) > 1:
-        ratio = values[keep_idx[0]] / values[keep_idx[1]]
-        if ratio > max_ratio:
-            keep_idx = [keep_idx[0]]
-        elif ratio < (1 / max_ratio):
-            keep_idx = [keep_idx[1]]
-    to_keep = [labels[i] for i in keep_idx]
-    changes = {label: 1 if label in to_keep else 0 for label in labels}
-    output = sitk.ChangeLabel(components, changeMap=changes)
-    return output
-
-
-def split_airways_from_lungmask(src_image, lung_mask):
-    median_image = sitk.Median(src_image)
-    clipped = clip_image(median_image, -1100, -850)
-    masked_image = sitk.Mask(clipped, lung_mask)
-    thresh_image = sitk.OtsuMultipleThresholds(masked_image, numberOfThresholds=4, numberOfHistogramBins=256)
-    airways = sitk.Equal(thresh_image, 0)
-    airways = get_largest_object(airways)
-    airways = sitk.Cast(airways, 1)
-    inverse_airways = sitk.Not(airways)
-    lungmask_noair = sitk.And(lung_mask, inverse_airways)
-    lungmask_noair = sitk.BinaryMorphologicalOpening(lungmask_noair, 1, sitk.sitkBall)
-    lungmask_noair = lung_connected_components(lungmask_noair)
-    return lungmask_noair, airways
-
-
 def compare_images(image1, image2):
     diff = sitk.Subtract(image1, image2)
     diff = sitk.Abs(diff)
@@ -1015,44 +774,6 @@ def compare_images(image1, image2):
     stats.Execute(diff)
     print("Total Difference: {}".format(stats.GetSum()))
     print("Max Difference: {}".format(stats.GetMaximum()))
-
-
-def get_nodule_overlap_stats(lung_mask, nodule_mask):
-    lung_mask = sitk.Greater(lung_mask, 0)
-    nodule_labels = sitk.ConnectedComponent(nodule_mask)
-    stats_filter = sitk.LabelShapeStatisticsImageFilter()
-    stats_filter.SetComputePerimeter(False)
-    stats_filter.Execute(nodule_labels)
-    nodule_stat = sitk.LabelShapeStatisticsImageFilter()
-    nodule_stat.SetComputePerimeter(False)
-    results = []
-    for label in stats_filter.GetLabels():
-        nodule_pix = stats_filter.GetNumberOfPixels(label)
-        single_nodule = sitk.Equal(nodule_labels, label)
-        overlap = sitk.And(lung_mask, single_nodule)
-        nodule_stat.Execute(overlap)
-        overlap_pix = 0 if not nodule_stat.HasLabel(1) else nodule_stat.GetNumberOfPixels(1)
-        centroid = nodule_mask.TransformPhysicalPointToIndex(stats_filter.GetCentroid(label))
-        result = {
-            'overlap_pixels': overlap_pix,
-            'nodule_pixels': nodule_pix,
-            'coverage_percent': overlap_pix / nodule_pix,
-            'centroid_slice': centroid[2],
-            'centroid_x': centroid[1],
-            'centroid_y': centroid[0],
-            'eq_sphere_radius_mm': stats_filter.GetEquivalentSphericalRadius(label)
-        }
-        results.append(result)
-    return results
-
-
-def get_overlap_stats(lung_pred, lung_label):
-    lung_pred = sitk.Greater(lung_pred, 0)
-    overlap_stat = sitk.LabelOverlapMeasuresImageFilter()
-    overlap_stat.Execute(lung_pred, lung_label)
-    dice = overlap_stat.GetDiceCoefficient()
-    jaccard = overlap_stat.GetJaccardCoefficient()
-    return dice, jaccard
 
 
 def get_bounds(label: ImageType, bg_val: float = 0) -> List[Tuple[int, int]]:
@@ -1064,95 +785,33 @@ def get_bounds(label: ImageType, bg_val: float = 0) -> List[Tuple[int, int]]:
         A list of the (start, stop) indices for each axis
     """
     image_type = get_image_type(label)
+    if image_type == 'numpy':
+        if bg_val != 0:
+            label = label != bg_val
+        bounds = []
+        for i in range(label.ndim):
+            axis_check = np.any(label, axis=tuple([j for j in range(label.ndim) if j != i]))
+            axis_range = np.where(axis_check == True) # noqa
+            bounds.append([axis_range[0][0], axis_range[0][-1] + 1])
+        return bounds
     if image_type == 'sitk':
-        mask = sitk.GetAraryViewFromImage(label)
-    elif image_type == 'itk':
-        mask = itk.GetArrayViewFromImage(label)
-    elif image_type == 'smartimage':
-        mask = label.as_view()
+        pass
     else:
-        mask = label
-    bounds = []
-    if bg_val != 0:
-        mask = mask != bg_val
-    for i in range(mask.ndim):
-        axis_check = np.any(mask, axis=tuple([j for j in range(mask.ndim) if j != i]))
-        axis_range = np.where(axis_check == True) # noqa
-        bounds.append([axis_range[0][0], axis_range[0][-1] + 1])
-    if len(bounds) == 3 and image_type in ['itk', 'sitk', 'smartimage']:
-        bounds = bounds[::-1]
-    return bounds
+        label = as_image(label).sitk_image
+    ndim = label.GetDimension()
+    filt = sitk.LabelShapeStatisticsImageFilter()
+    filt.SetComputePerimeter(False)
+    filt.Execute(label)
+    bounds = {}
+    for label_idx in filt.GetLabels():
+        label_bounds = filt.GetBoundingBox(label_idx)
+        bounds[label_idx] = [[label_bounds[i], label_bounds[i] + label_bounds[i + ndim]] for i in range(ndim)]
 
 
 def get_shared_bounds(mask1, mask2):
-    bounds1, bounds2 = get_bounds(mask1), get_bounds(mask2)
+    bounds1, bounds2 = get_bounds(mask1)[1], get_bounds(mask2)[1]
     shared_bounds = [[max(bounds1[i], bounds2[i]), min(bounds1[i], bounds2[i]), None] for i in range(len(bounds1))]
     return shared_bounds
-
-
-def get_label_bounds(mask, background_val=0, results_as_str=False):
-    """Get the corners of the bounding box/cube for each label in a given mask
-
-    Parameters
-    ----------
-    mask : SimpleITK.Image or SmartImage or numpy.ndarray
-        The mask to analyze
-    background_val : int
-        The value of the background - bounds will not be returned for this label
-    results_as_str : bool
-        If true, return the bounds as "start_idx stop_idx" for each dimension separated by spaces
-
-    Returns
-    -------
-    A dictionary with the segmentation label as keys and the bounds as values
-    """
-    is_image = False
-    if isinstance(mask, sitk.Image):
-        mask = sitk.GetArrayFromImage(mask)
-        is_image = True
-    elif isinstance(mask, SmartImage):
-        mask = mask.as_array()
-        is_image = True
-
-    labels = np.unique(mask)
-    results = {}
-    for label in labels:
-        if label == background_val:
-            continue
-        bounds = []
-        label_mask = mask == label
-        for i in range(mask.ndim):
-            axis_check = np.any(label_mask, axis=tuple([j for j in range(mask.ndim) if j != i]))
-            axis_range = np.where(axis_check == True) # noqa
-            bounds.append(slice(axis_range[0][0], axis_range[0][-1] + 1))
-        if len(bounds) == 3 and is_image:
-            bounds = bounds[::-1]
-        if results_as_str:
-            bounds = ' '.join(['{} {}'.format(item.start, item.stop) for item in bounds])
-        results[label] = bounds
-    return results
-
-# ## ITK Methods ###
-
-
-def convert_sitk_to_itk(image):
-    if isinstance(image, itk.Image):
-        return image
-    itk_image = itk.GetImageFromArray(sitk.GetArrayViewFromImage(image), is_vector=image.GetNumberOfComponentsPerPixel() > 1)
-    itk_image.SetOrigin(image.GetOrigin())
-    itk_image.SetSpacing(image.GetSpacing())
-    itk_image.SetDirection(itk.GetMatrixFromArray(np.reshape(np.array(image.GetDirection()), [image.GetDimension()] * 2)))
-    return itk_image
-
-
-def convert_itk_to_sitk(image):
-    if isinstance(image, sitk.Image):
-        return image
-    sitk_image = sitk.GetImageFromArray(itk.GetArrayViewFromImage(image), isVector=image.GetNumberOfComponentsPerPixel() > 1)
-    sitk_image.SetOrigin(tuple(image.GetOrigin()))
-    sitk_image.SetSpacing(tuple(image.GetSpacing()))
-    sitk_image.SetDirection(itk.GetArrayFromMatrix(image.GetDirection()).flatten())
-    return sitk_image
 
 
 def split_itk_image_channels(image):
@@ -1210,42 +869,7 @@ def resample_group(images, ref_idx=0, ref_image=None, outside_val=-1000, interp=
     return images
 
 
-def get_distance_metrics(label_image, pred_image, label=None):
-    if label is not None:
-        label_image = sitk.Equal(label_image, int(label))
-        pred_image = sitk.Equal(pred_image, int(label))
-
-    label_dist = sitk.SignedMaurerDistanceMap(label_image, squaredDistance=False, useImageSpacing=True)
-    label_surf = sitk.LabelContour(label_image)
-
-    pred_dist = sitk.SignedMaurerDistanceMap(pred_image, squaredDistance=False, useImageSpacing=True)
-    pred_surf = sitk.LabelContour(pred_image)
-
-    label_surf_arr = sitk.GetArrayViewFromImage(label_surf) > 0.5
-    pred_surf_arr = sitk.GetArrayViewFromImage(pred_surf) > 0.5
-
-    pred2label_arr = sitk.GetArrayViewFromImage(label_dist)[pred_surf_arr]
-    label2pred_arr = sitk.GetArrayViewFromImage(pred_dist)[label_surf_arr]
-
-    all_dist_arr = np.concatenate([label2pred_arr, pred2label_arr])
-
-    mean_abs_pred_dist = np.mean(np.abs(pred2label_arr))
-    mean_rel_pred_dist = np.mean(pred2label_arr)
-    mean_abs_s2s_dist = np.mean(np.abs(all_dist_arr))
-    median_abs_s2s_dist = np.median(np.abs(all_dist_arr))
-    max_abs_s2s_dist = np.max(np.abs(all_dist_arr))
-    results = {
-        'MeanAbsolutePredictionDistance': mean_abs_pred_dist,
-        'MeanRelativePredictionDistance': mean_rel_pred_dist,
-        'MeanSurfaceToSurfaceDistance': mean_abs_s2s_dist,
-        'MedianSurfaceToSurfaceDistance': median_abs_s2s_dist,
-        'MaxSurfaceToSurfaceDistance': max_abs_s2s_dist,
-    }
-    return results
-
-
-def zeros_like(image, dtype=None):
-    #TODO - differentiate this from the SmartImage method
+def sitk_zeros_like(image, dtype=None):
     if not isinstance(image, dict):
         image = get_sampling_info(image)
     if dtype is not None:
@@ -1363,6 +987,10 @@ def get_num_objects(label: ImageType, min_size: float = 0, bg_val: float = 0):
         label = label.sitk_image
     elif label_type == 'itk':
         label = as_image(label).sitk_image
+    if bg_val == 0 and min_size == 0:
+        filt = sitk.ConnectedComponentImageFilter()
+        filt.Execute(label)
+        return filt.GetObjectCount()
     cc = sitk.ConnectedComponent(label)
     label_filt = sitk.LabelShapeStatisticsImageFilter()
     label_filt.SetBackgroundValue(bg_val)
@@ -1402,19 +1030,6 @@ def cast_to_smallest_dtype(image: Union[sitk.Image, SmartImage]) -> sitk.Image:
             break
     else:
         raise ValueError('Unable to find proper dtype - this should never happen')
-    #     unsigned = False
-    #     if minimum >= np.iinfo(np.int8) and maximum <= np.iinfo(np.int8):
-    #         dtype = 'int8'
-    #     elif minimum >= np.iinfo(np.int16) and maximum <= np.iinfo(np.int16):
-    #         dtype = 'int16'
-    #     maximum = max(maximum, abs(minimum))
-    # if (maximum < np.iinfo(np.uint8).min:
-    #     dtype = 'int8'
-    # elif maximum < 32767:
-    #     dtype = 'int16'
-    # if unsigned:
-    #     dtype = 'u' + dtype
-    # dtype = DTYPE_STRING[dtype][1]
     return sitk.Cast(image, SmartType.as_sitk(dtype))
 
 
@@ -1426,7 +1041,7 @@ def get_value_range(image: sitk.Image) -> Tuple[float, float]:
     return minimum, maximum
 
 
-def check_small_diff(img1: sitk.Image, img2: sitk.Image, threshold: float=1e-4, spec_thresholds: Optional[dict]=None, verbose: bool=True) -> bool:
+def check_small_diff(img1: sitk.Image, img2: sitk.Image, threshold: float = 1e-4, spec_thresholds: Optional[dict] = None, verbose: bool = True) -> bool:
     """Check whether differences in image size, spacing, or origin pass a defined threshold
 
     Parameters
@@ -1579,52 +1194,66 @@ def compare_relabel(label: SmartImage, neighbor: SmartImage) -> Tuple[SmartImage
     return result_label, neighbor, changed_neighbor, remaining_obj
 
 
-def correct_labels(label_img: SmartImage, confusion_groups: list, multiobject_labels: list) -> SmartImage:
-    """Correct label objects based on potential confusion groups and known multi-object labels
+def repair_label(raw_label: SmartImage, skip_labels: dict, border_tol: float = 1) -> SmartImage:
+    raw_label = as_image(raw_label)
+    to_check_label = zeros_like(raw_label)  # may need to be uint16 if num objects > 255
 
-    Parameters
-    ----------
-    label_img : SmartImage
-        The label image to correct
-    confusion_groups : list
-        A group of lists where each list is a set of labels that could be confused for eachother
-    multiobject_labels : list
-        A list of labels that are allowed to have multiple objects
-
-    Note
-    ----
-    This is for errors where a piece of one contiguous object is mis-labeled as another class or where a
-    class that should only have a single labeled object has multiple occurences. In the first case, the
-    erroneous piece will be reassigned to a touching object in the same confusion group. In the second
-    case, only the largest object will be preserved.
-
-    #TODO - this can be improved to do all comparisons in one pass
-    """
-    confusion_lookup = {}
-    for group in confusion_groups:
-        for item in group:
-            confusion_lookup.setdefault(item, []).extend([subitem for subitem in group if subitem != item])
-    labels = get_unique_labels(label_img)
-    for idx in labels:
-        num_objects = get_num_objects(label_img == idx)
-        if idx in multiobject_labels:
+    to_check_lookup = {}
+    max_idx = 0
+    for label_idx in raw_label.unique()[1:]:
+        if label_idx in skip_labels:
             continue
-        elif idx in confusion_lookup and num_objects > 1:
-            temp = label_img == idx
-            label_img = SmartImage(sitk.ChangeLabel(label_img.sitk_image, changeMap={idx: 0}))
-            remaining_obj = np.Inf
-            for neighbor_idx in confusion_lookup[idx]:
-                temp, neighbor, changed_neighbor, remaining_obj = compare_relabel(temp, label_img == neighbor_idx)
-                if changed_neighbor:
-                    label_img = SmartImage(sitk.ChangeLabel(label_img.sitk_image, changeMap={neighbor_idx: 0, idx: 0}))
-                    label_img = label_img + neighbor * neighbor_idx
-                if remaining_obj == 1:
-                    break
-            else:
-                if remaining_obj > 1:
-                    temp = SmartImage(get_largest_object(temp.sitk_image))
-            label_img = label_img + temp * idx
+        fg = raw_label == label_idx
+        cc_filt = sitk.ConnectedComponentImageFilter()
+        cc = cc_filt.Execute(fg.sitk_image)
+        num_objects = cc_filt.GetObjectCount()
+        if num_objects < 255:
+            cc = sitk.Cast(cc, sitk.sitkUInt8)
         else:
-            if num_objects != 1:
-                print('Found {} for idx {}, expected 1'.format(num_objects, idx))
-    return label_img
+            raise ValueError('Too many objects for a single label')
+        change_map = {}
+        if num_objects != 1:
+            largest = [0, -1]
+            filt = sitk.LabelShapeStatisticsImageFilter()
+            filt.SetComputePerimeter(False)
+            filt.Execute(cc)
+            for sublabel_idx in filt.GetLabels():
+                change_map[sublabel_idx] = sublabel_idx + max_idx
+                to_check_lookup[sublabel_idx + max_idx] = filt.GetBoundingBox(sublabel_idx)
+                label_size = filt.GetNumberOfPixels(sublabel_idx)
+                if label_size > largest[1]:
+                    largest = [sublabel_idx, label_size]
+            change_map[largest[0]] = 0
+            to_check = sitk.ChangeLabel(cc, changeMap=change_map)
+            raw_label = raw_label - (to_check != 0) * label_idx
+            to_check_label = to_check_label + to_check
+        max_idx += (num_objects - 1)
+
+    change_map = {}
+    for label_idx in to_check_lookup:
+        x_start, y_start, z_start, x_size, y_size, z_size = to_check_lookup[label_idx]
+        label_slice = (slice(x_start, x_start + x_size), slice(y_start, y_start + y_size), slice(z_start, z_start + z_size))
+        to_check_small = to_check_label[label_slice] == label_idx
+
+        check_dist = sitk.SignedMaurerDistanceMap(to_check_small.sitk_image, squaredDistance=False, useImageSpacing=True)
+        check_dist_arr = sitk.GetArrayViewFromImage(check_dist)
+        fixed_small = raw_label[label_slice]
+        maybe_found = []
+        for sublabel_idx in fixed_small.unique()[1:]:
+            if sublabel_idx in skip_labels:
+                continue
+            contour = sitk.LabelContour((fixed_small == sublabel_idx).sitk_image, fullyConnected=True)
+            contour_arr = sitk.GetArrayViewFromImage(contour).astype(np.bool_)
+            dists = np.abs(check_dist_arr[contour_arr])
+            border_val = (dists < border_tol).sum()
+            if border_val > 0:
+                maybe_found.append([sublabel_idx, border_val])
+        maybe_found = sorted(maybe_found, key=lambda x: x[1], reverse=True)
+        if len(maybe_found) > 0:
+            change_map[label_idx] = maybe_found[0][0]
+            print('Adding to {}'.format(maybe_found[0][0]), maybe_found)
+        else:
+            change_map[label_idx] = 0
+
+    raw_label = raw_label + sitk.ChangeLabel(to_check_label.sitk_image, changeMap=change_map)
+    return raw_label
