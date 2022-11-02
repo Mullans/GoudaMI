@@ -39,6 +39,8 @@ def get_image_type(image):
     type_str = str(type(image))
     if 'itk.itkImage' in type_str:
         return 'itk'
+    elif 'SimpleITK.ImageFileReader' in type_str:
+        return 'sitkreader'
     elif 'SimpleITK.Image' in type_str:
         return 'sitk'
     elif 'NDArrayITKBase' in type_str or 'ndarray' in type_str:
@@ -95,28 +97,31 @@ class SmartImage(object):
         self.__updated_sitk: bool = False
         self.__image_type: str = None
         self.__meta_data: dict = None
+        if default_type not in ['sitk', 'itk']:
+            raise ValueError('SmartImage default type must be `sitk` or `itk`.')
+        self.default_type = default_type
         # These are calculated only as needed
         self.__reset_internals()
 
-        self.default_type = default_type
         if hasattr(path, 'abspath'):
             path = path.abspath
+        if isinstance(path, sitk.ImageFileReader):
+            path = path.GetFileName()
+            if path == '':
+                raise ValueError('Cannot initialize SmartImage with empty file reader')
         if not isinstance(path, (str, os.PathLike)):
             input_type = get_image_type(path)
             if input_type == 'itk':
-            # if isinstance(path, itk.Image):
                 self.__itk_image = path
                 self.__sitk_image = None
                 self.__updated_itk = True
                 self.path = ""
             elif input_type == 'sitk':
-            # elif isinstance(path, sitk.Image):
                 self.__sitk_image = path
                 self.__itk_image = None
                 self.__updated_sitk = True
                 self.path = ""
             elif input_type == 'smartimage':
-            # elif isinstance(path, SmartImage):
                 # NOTE: This is just a shallow copy of the other SmartImage for convenience
                 self.default_type = path.default_type
                 self.__sitk_image = path.__sitk_image
@@ -125,7 +130,6 @@ class SmartImage(object):
                 self.__updated_sitk = path.__updated_sitk
                 self.path = path.path
             elif input_type == 'numpy':
-            # elif isinstance(path, np.ndarray):
                 if path.ndim != 3:
                     raise ValueError("SmartImage can only be initialized with volumes for now")
                 if path.dtype == bool:
@@ -220,15 +224,14 @@ class SmartImage(object):
                 return dtype
         image = self.image
         if self.image_type == 'itk':
-            # return type(image)  # returns the python type?
-            return SmartType.as_string(itk.template(image)[1][0])  # returns the C-type
+            return SmartType.as_string(itk.template(image)[1][0])
         elif self.image_type == 'sitk':
             return SmartType.as_string(image.GetPixelID())
 
     @property
     def image_type(self):
         if self.__image_type is None:
-            self.image
+            return self.default_type
         return self.__image_type
 
     @property
@@ -532,6 +535,9 @@ class SmartImage(object):
         label_filt.Execute(self.sitk_image)
         self.__unique_labels = label_filt.GetLabels()
         return label_filt
+
+    def connected_components(self):
+        return self.apply()
 
     def unique(self):
         if self.__unique_labels is None:
@@ -853,8 +859,8 @@ class SmartImage(object):
     def change_label(self, changeMap: dict, in_place: bool = False):
         return self.__perform_op(sitk.ChangeLabel, None, changeMap, in_place)
 
-    def __perform_op(self, sitk_op, itk_op, target, in_place=False):
-        """Perform one of two operations depending on current image type
+    def __perform_op(self, sitk_op, itk_op, *args, in_place=False, **kwargs):
+        """Perform the sitk/itk operation depending on the current image type
 
         Parameters
         ----------
@@ -862,26 +868,32 @@ class SmartImage(object):
             The sitk operation - ex. sitk.Add, sitk.Subtract
         itk_op : function
             The itk operation - ex. itk.AddImageFilter, sitk.SubtractImageFilter
-        target : anything
-            Whatever the second argument of the operation will be
+        in_place : bool
+            If true, update the current image, by default False
 
         Note
         ----
-        All operations are assumed to have the forms `sitk.Operation(self.image, target)` or `itk.Operation(self.image, target)`
+        All operations are assumed to take an image as their first argument.
+        Any SmartImage or Image objects passed as args will be converted before being passed to the op.
+
         """
-        # TODO - take in *args and **kwargs instead of target and do a smart conversion of images before operations
         image = self.image
-        target_type = get_image_type(target)
         if self.image_type == 'sitk':
-            if target_type == 'smartimage':
-                target = target.sitk_image
-            result = sitk_op(image, target)
+            new_args = []
+            for item in args:
+                item_type = get_image_type(item)
+                if item_type in ['smartimage', 'itk']:
+                    item = as_image(item).sitk_image
+                new_args.append(item)
+            result = sitk_op(image, *new_args, **kwargs)
         elif self.image_type == 'itk':
-            if target_type == 'smartimage':
-                target = target.itk_image
-            result = itk_op(image, target)
-        else:
-            raise ValueError('self.image is type {}'.format(type(image)))
+            new_args = []
+            for item in args:
+                item_type = get_image_type(item)
+                if item_type in ['smartimage', 'sitk']:
+                    item = as_image(item).itk_image
+                new_args.append(item)
+            result = itk_op(image, *new_args, **kwargs)
 
         result_type = get_image_type(result)
         if result_type in ['sitk', 'itk', 'smartimage']:

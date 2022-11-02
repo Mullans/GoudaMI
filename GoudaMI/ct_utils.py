@@ -2,7 +2,7 @@ import glob
 import os
 import warnings
 from collections.abc import Iterable
-from typing import Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import gouda
 
@@ -477,18 +477,19 @@ def get_sampling_info(image):
     """Get the sampling info of an image for resample_to_ref"""
     if isinstance(image, (str, gouda.GoudaPath)):
         image = read_meta(image)
-    if isinstance(image, (sitk.Image, sitk.ImageFileReader, SmartImage)):
+    image_type = get_image_type(image)
+    if image_type in ['sitk', 'sitkreader', 'smartimage']:
         result = {
             'size': image.GetSize(),
             'origin': image.GetOrigin(),
             'spacing': image.GetSpacing(),
             'direction': image.GetDirection()
         }
-        if isinstance(image, SmartImage):
+        if image_type == 'smartimage':
             result['dtype'] = image.dtype
         else:
             result['dtype'] = image.GetPixelID()
-    elif isinstance(image, itk.Image):
+    elif image_type == 'itk':
         result = {
             'size': image.GetLargestPossibleRegion().GetSize(),
             'spacing': image.GetSpacing(),
@@ -1054,29 +1055,31 @@ def get_overlap_stats(lung_pred, lung_label):
     return dice, jaccard
 
 
-def get_bounds(mask):
-    """Get the corners of the bounding box/cube for the given mask
+def get_bounds(label: ImageType, bg_val: float = 0) -> List[Tuple[int, int]]:
+    """Get the corners of the bounding box/cube for the given binary label
 
-    Note
-    ----
-    This assumes the background value is 0
+    Returns
+    -------
+    List[Tuple[int, int]]
+        A list of the (start, stop) indices for each axis
     """
-    is_image = False
-    if isinstance(mask, sitk.Image):
-        mask = sitk.GetArrayViewFromImage(mask)
-        is_image = True
-    elif isinstance(mask, itk.Image):
-        mask = itk.GetArrayViewFromImage(mask)
-        is_image = True
-    elif isinstance(mask, SmartImage):
-        mask = mask.as_view()
-        is_image = True
+    image_type = get_image_type(label)
+    if image_type == 'sitk':
+        mask = sitk.GetAraryViewFromImage(label)
+    elif image_type == 'itk':
+        mask = itk.GetArrayViewFromImage(label)
+    elif image_type == 'smartimage':
+        mask = label.as_view()
+    else:
+        mask = label
     bounds = []
+    if bg_val != 0:
+        mask = mask != bg_val
     for i in range(mask.ndim):
         axis_check = np.any(mask, axis=tuple([j for j in range(mask.ndim) if j != i]))
         axis_range = np.where(axis_check == True) # noqa
         bounds.append([axis_range[0][0], axis_range[0][-1] + 1])
-    if len(bounds) == 3 and is_image:
+    if len(bounds) == 3 and image_type in ['itk', 'sitk', 'smartimage']:
         bounds = bounds[::-1]
     return bounds
 
