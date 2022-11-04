@@ -4,34 +4,12 @@ import os
 import warnings
 from typing import List, Optional, Union
 
-import gouda
 import numpy as np
 import SimpleITK as sitk
 
-from .constants import SmartType
+from GoudaMI.constants import SmartType
 
-try:
-    # raise ImportError()
-    import itk
-    ITK_AVAILABLE = True
-except ImportError:
-    class DummyModule:
-        # TODO: Come up with a better way to handle missing itk
-        def __init__(self):
-            self.Image = None
-            self.SubtractImageFilter = None
-            self.AndImageFilter = None
-            self.OrImageFilter = None
-            self.AddImageFilter = None
-
-        def imread(self, *args, **kwargs):
-            raise ImportError('itk cannot be imported, so itk methods cannot be used')
-
-        def __getattr__(self, attr):
-            warnings.warn('itk cannot be imported, so itk methods cannot be used', ImportWarning, stacklevel=2)
-
-    itk = DummyModule()
-    ITK_AVAILABLE = False
+from GoudaMI.optional_imports import itk
 
 
 def get_image_type(image):
@@ -742,7 +720,7 @@ class SmartImage(object):
             resampleFilter.SetReferenceImage(ref.sitk_image)
         elif isinstance(ref, sitk.Image):
             resampleFilter.SetReferenceImage(ref)
-        elif isinstance(ref, (str, gouda.GoudaPath)):
+        elif 'goudapath' in str(type(ref)):
             ref = str(ref)
             if os.path.isdir(ref):
                 dicom_files = sorted(glob.glob(os.path.join(ref, '*.dcm')))
@@ -883,6 +861,8 @@ class SmartImage(object):
         """
         image = self.image
         if self.image_type == 'sitk':
+            if sitk_op is None:
+                raise NotImplementedError("The SimpleITK version of this operation has not been implemented for SmartImage yet")
             new_args = []
             for item in args:
                 item_type = get_image_type(item)
@@ -891,6 +871,8 @@ class SmartImage(object):
                 new_args.append(item)
             result = sitk_op(image, *new_args, **kwargs)
         elif self.image_type == 'itk':
+            if itk_op is None:
+                raise NotImplementedError("The ITK version of this operation has not been implemented for SmartImage yet")
             new_args = []
             for item in args:
                 item_type = get_image_type(item)

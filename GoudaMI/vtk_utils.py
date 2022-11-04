@@ -1,5 +1,5 @@
-import vtk
-from .convert import wrap4itk
+from GoudaMI.convert import wrap4itk
+from GoudaMI.optional_imports import vtk
 
 
 def vtk_copy_information(image, ref):

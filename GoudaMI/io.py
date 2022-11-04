@@ -4,7 +4,7 @@ import warnings
 
 import numpy as np
 
-from .smart_image import SmartImage, get_image_type
+from GoudaMI.smart_image import SmartImage, get_image_type
 
 
 # def write_vtk(data, output_path, output_version=42):
@@ -37,10 +37,9 @@ def read_vtk(path, data_type='polydata'):
 
 
 def read_sitk(path, allow_search=True):
-    import gouda
     import SimpleITK as sitk
     """Read a dicom image in either directory or single file formats"""
-    if isinstance(path, gouda.GoudaPath):
+    if 'goudapath' in str(type(path)):
         path = path.path
     if os.path.isdir(path):
         dicom_files = sorted(glob.glob(os.path.join(path, '*.dcm')))

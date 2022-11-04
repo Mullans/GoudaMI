@@ -1,12 +1,77 @@
-"Methods that are too project specific to be put with the rest"
+"Methods that are too project specific to be put with the rest, or use extra libraries (ie. scipy, opencv, etc.)"
+import os
 import warnings
+from typing import Any
 
 import numpy as np
 import SimpleITK as sitk
 
-from .constants import MIN_INTENSITY_PULMONARY_CT
-from .convert import as_array
-from .ct_utils import resample_to_ref, resample_rescale
+from GoudaMI.constants import MIN_INTENSITY_PULMONARY_CT
+from GoudaMI.convert import as_array
+from GoudaMI.ct_utils import resample_to_ref, resample_rescale
+from GoudaMI.smart_image import SmartImage
+
+
+def quick_save(data: Any, label=None, skip_existing_filenames=False):
+    """Quickly save an image/label in the project's scratch folder
+    Used in quick debugging with iterative output filenames
+
+    Parameters
+    ----------
+    data: array_like
+        The data to save
+    label: str
+        The full or extension-less filename to save the data under (the default is None)
+    skip_existing_filenames: bool
+        Whether to skip saving the file if the label is already taken (the default is False)
+    """
+    import gouda
+    scratch_dir = gouda.GoudaPath(os.getcwd() + '/scratch').ensure_dir()
+    gouda.ensure_dir(scratch_dir)
+    if label is None:
+        label = 'default'
+    elif label[0] == '.':
+        label = 'default' + label
+
+    if '.' not in label:
+        if hasattr(data, '__array__'):
+            label = label + '.npy'
+            if skip_existing_filenames:
+                if scratch_dir(label).exists():
+                    return
+            data = np.squeeze(np.array(data))
+            np.save(gouda.next_filename(scratch_dir(label).abspath), data)
+        elif isinstance(data, sitk.Image):
+            label = label + '.nii'
+            if skip_existing_filenames:
+                if scratch_dir(label).exists():
+                    return
+            sitk.WriteImage(data, gouda.next_filename(scratch_dir(label).abspath))
+        elif isinstance(data, (dict, list)):
+            label = label + '.json'
+            if skip_existing_filenames:
+                if scratch_dir(label).exists():
+                    return
+            gouda.save_json(data, gouda.next_filename(scratch_dir(label).abspath))
+        else:
+            raise ValueError("Unidentified data type")
+    else:
+        if skip_existing_filenames:
+            if scratch_dir(label).exists():
+                return
+        if hasattr(data, '__array__'):
+            data = np.squeeze(np.array(data))
+            if '.nii' in label or '.nrrd' in label:
+                data = sitk.GetImageFromArray(data)
+                sitk.WriteImage(data, gouda.next_filename(scratch_dir(label).abspath))
+            else:
+                np.save(gouda.next_filename(scratch_dir(label).abspath), data)
+        elif isinstance(data, sitk.Image):
+            sitk.WriteImage(data, gouda.next_filename(scratch_dir(label).abspath))
+        elif isinstance(data, (dict, list)):
+            gouda.save_json(data, gouda.next_filename(scratch_dir(label).abspath))
+        else:
+            raise ValueError("Unidentified data type")
 
 
 def resample_isocube_to_source(cube_path, cropped_path=None, original_path=None, label=None, outside_val=MIN_INTENSITY_PULMONARY_CT):
@@ -278,3 +343,76 @@ def split_airways_from_lungmask(src_image, lung_mask):
     lungmask_noair = sitk.BinaryMorphologicalOpening(lungmask_noair, 1, sitk.sitkBall)
     lungmask_noair = lung_connected_components(lungmask_noair)
     return lungmask_noair, airways
+
+
+def array_get_surface(image, connectivity=1):
+    import scipy.ndimage.morphology
+    image = image.astype(np.bool)
+    conn = scipy.ndimage.morphology.generate_binary_structure(image.ndim, connectivity)
+    return image ^ scipy.ndimage.morphology.binary_erosion(image, conn)
+
+
+def array_get_distances(image_1, image_2, sampling=1, connectivity=1):
+    import scipy.ndimage.morphology
+    surf_1 = array_get_surface(image_1, connectivity=connectivity)
+    surf_2 = array_get_surface(image_2, connectivity=connectivity)
+    dta = scipy.ndimage.morphology.distance_transform_edt(~surf_1, sampling)
+    dtb = scipy.ndimage.morphology.distance_transform_edt(~surf_2, sampling)
+    return np.concatenate([np.ravel(dta[surf_2 != 0]), np.ravel(dtb[surf_1 != 0])])
+
+
+def get_total_hull(arr):
+    """Get a convex hull encompasing all foreground of a 2d label"""
+    import cv2
+    result = np.zeros_like(arr)
+    if arr.sum() == 0:
+        return result
+    contours, hierarchy = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    full_hull = cv2.convexHull(np.concatenate(contours, axis=0), False)
+    cv2.drawContours(result, [full_hull], -1, 1, -1)
+    return result
+
+
+def fill2d(arr, force_slices=False):
+    # TODO - update this to not require scipy
+    import scipy.ndimage.morphology
+    if isinstance(arr, sitk.Image) and not force_slices:
+        arr = sitk.ConstantPad(arr, [0, 0, 1], [0, 0, 1], 1)
+        arr = sitk.BinaryFillhole(arr)
+        return arr[:, :, 1:-1]
+    if isinstance(arr, (sitk.Image, SmartImage)):
+        pass
+    output = np.zeros_like(arr)
+    for idx in range(arr.shape[0]):
+        check_slice = arr[idx]
+        # check_slice = scipy.ndimage.binary_dilation(check_slice)
+        filled = scipy.ndimage.binary_fill_holes(check_slice)
+        output[idx] = filled
+    return output
+
+
+def fill_slices(arr, dilate=0, erode=0, axis=0):
+    # TODO - update this to not require scipy
+    import scipy.ndimage.morphology
+    import skimage.morphology
+    src_img = None
+    if isinstance(arr, (sitk.Image, SmartImage)):
+        src_img = arr
+        arr = sitk.GetArrayFromImage(arr)
+    output = np.zeros_like(arr)
+    slices = [slice(None)] * arr.ndim
+    structs = [skimage.morphology.disk(dilate), skimage.morphology.disk(erode)]
+
+    for idx in range(arr.shape[axis]):
+        slices[axis] = slice(idx, idx + 1)
+        arr_slice = np.squeeze(arr[tuple(slices)])
+        if dilate > 0:
+            arr_slice = skimage.morphology.binary_dilation(arr_slice, footprint=structs[0])
+        arr_slice = scipy.ndimage.binary_fill_holes(arr_slice)
+        if erode > 0:
+            arr_slice = skimage.morphology.binary_erosion(arr_slice, footprint=structs[0])
+        output[tuple(slices)] = arr_slice
+    if src_img is not None:
+        output = sitk.GetImageFromArray(output)
+        output.CopyInformation(src_img)
+    return output

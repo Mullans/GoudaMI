@@ -1,10 +1,9 @@
 import os
 import urllib
 
-import gouda
 import SimpleITK as sitk
 
-from .smart_image import SmartImage
+from GoudaMI.smart_image import SmartImage
 
 try:
     sitk.ElastixImageFilter
@@ -22,9 +21,9 @@ def get_elastix_params(param_number=54, param_dir='param_files', overwrite=False
     if param_number not in PARAMETERS:
         raise ValueError('Only parameters {} have been set up.'.format(list(PARAMETERS.keys())))
     param_url = PARAMETERS[param_number]
-
-    data_dir = gouda.GoudaPath(param_dir).ensure_dir()
-    param_path = data_dir.add_basename(param_url)
+    if not os.path.exists(param_dir):
+        os.makedirs(param_dir)
+    param_path = os.path.join(param_dir, os.path.basename(param_url))
     if param_path.exists() and not overwrite:
         return sitk.ReadParameterFile(param_path.abspath)
     attempts = 0
@@ -105,7 +104,7 @@ def perform_transformation(moving_image, parameters, is_segmentation=False, retu
             filt = sitk.MinimumMaximumImageFilter()
             filt.Execute(moving_image)
             outside_val = float(filt.GetMinimum())
-    
+
     if interp is not None:
         if interp in TRANSFORM_INTERPOLATORS:
             interp = TRANSFORM_INTERPOLATORS[interp]
@@ -118,7 +117,7 @@ def perform_transformation(moving_image, parameters, is_segmentation=False, retu
     parameters['DefaultPixelValue'] = [str(outside_val)]
     # if is_segmentation:
     #     parameters['FinalBSplineInterpolationOrder'] = '0'
-            
+
     trans_filter = sitk.TransformixImageFilter()
     trans_filter.SetMovingImage(moving_image)
     trans_filter.SetTransformParameterMap(parameters)

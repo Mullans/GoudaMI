@@ -2,10 +2,9 @@ from typing import Tuple, Union
 
 import numpy as np
 import SimpleITK as sitk
-from scipy import ndimage
 
-from .ct_utils import get_unique_labels
-from .smart_image import SmartImage
+from GoudaMI.ct_utils import get_unique_labels
+from GoudaMI.smart_image import SmartImage
 
 ImageTypeS = Union[sitk.Image, SmartImage]
 

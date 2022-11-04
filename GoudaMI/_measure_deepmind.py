@@ -17,7 +17,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import numpy as np
-from scipy import ndimage
 import SimpleITK as sitk
 
 ENCODE_NEIGHBOURHOOD_3D_KERNEL = np.array([[[128, 64], [32, 16]],
@@ -310,6 +309,7 @@ def create_table_neighbour_code_to_surface_area(spacing_mm):
 
 
 def _dist_edt(borders, spacing):
+    from scipy import ndimage
     if borders.any():
         # normally shows fg dist to bg, so we invert it first
         return ndimage.distance_transform_edt(~borders, sampling=spacing)
@@ -338,6 +338,7 @@ def normalized_surface_dice_old(label1: sitk.Image, label2: sitk.Image, tol: flo
     Original Pub: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8314151/
     Original Implementation: https://github.com/deepmind/surface-distance/
     """
+    from scipy import ndimage
     gt_arr = sitk.GetArrayFromImage(label1).astype(np.bool_)
     pred_arr = sitk.GetArrayFromImage(label2).astype(np.bool_)
     spacing = np.array(label1.GetSpacing())

@@ -6,12 +6,13 @@ import sys
 import warnings
 from typing import Optional
 
-import itk
+
 import numpy as np
 import SimpleITK as sitk
-import vtk
 
-from .smart_image import SmartImage, get_image_type, ImageType
+from GoudaMI.optional_imports import itk, vtk
+from GoudaMI.smart_image import SmartImage, get_image_type, ImageType
+
 # TODO - create wrap4XXX for itk, sitk, and vtk to take any format, convert to chosen, and return as original format
 
 
