@@ -905,6 +905,35 @@ def get_value_range(image: sitk.Image) -> Tuple[float, float]:
     return minimum, maximum
 
 
+def percentile_rescale(image: ImageType, upper_percentile: float, lower_percentile: float = None, output_min: float = 0, output_max: float = 1) -> ImageType:
+    """Rescale an image based on percentiles
+
+    Parameters
+    ----------
+    image : ImageType
+        The image to rescale
+    upper_percentile : float
+        The upper percentile
+    lower_percentile : float, optional
+        The lower percentile, by default uses 1 - upper_percentile
+    output_min : float, optional
+        The minimum output value, by default 0
+    output_max : float, optional
+        The maximum output value, by default 0
+    """
+    image_type = get_image_type(image)
+    image = as_image(image)
+    if lower_percentile is None:
+        lower_percentile = 100 - upper_percentile
+    lower, upper = np.percentile(image.as_view(), [lower_percentile, upper_percentile])
+    result = image.window(min=lower, max=upper, output_min=output_min, output_max=output_max)
+    if image_type == 'sitk':
+        return result.sitk_image
+    elif image_type == 'itk':
+        return as_image(result).itk_image
+    return result
+
+
 def check_small_diff(img1: sitk.Image, img2: sitk.Image, threshold: float = 1e-4, spec_thresholds: Optional[dict] = None, verbose: bool = True) -> bool:
     """Check whether differences in image size, spacing, or origin pass a defined threshold
 

@@ -13,7 +13,7 @@ from GoudaMI.optional_imports import itk
 
 
 def get_image_type(image):
-    """Convenience method to get object type without imports"""
+    """Convenience method to get object type without imports (in case itk/vtk is not installed)"""
     type_str = str(type(image))
     if 'itk.itkImage' in type_str:
         return 'itk'
@@ -31,6 +31,22 @@ def get_image_type(image):
         return 'dict'
     else:
         return None
+
+
+def get_dtype(image):
+    """Convenience method to get object pixel-type without imports"""
+    image_type = get_image_type(image)
+    if image_type == 'itk':
+        out_type = itk.template(image)[1][0]
+    elif image_type == 'sitk':
+        out_type = image.GetPixelID()
+    elif image_type == 'numpy' or image_type == 'smartimage':
+        out_type = image.dtype
+    elif image_type == 'dict':
+        out_type = image['dtype']
+    else:
+        return None
+    return SmartType.as_string(out_type)
 
 
 def _search_for_dicom(base_dir):
@@ -327,10 +343,7 @@ class SmartImage(object):
             if itk_dtype is None:
                 raise ValueError(f'Unknown dtype: {dtype}')
             dim = image.GetImageDimension()
-            caster = itk.CastImageFilter[type(image), itk.Image[itk_dtype, dim]]
-            caster.SetInput(image)
-            caster.Update()
-            image = caster.GetOutput()
+            image = itk.CastImageFilter[image, itk.Image[itk_dtype, dim]].New(image)
             if in_place:
                 return self.update(image)
         else:
@@ -587,7 +600,7 @@ class SmartImage(object):
             image = self.as_array()
             np.save(dest_path, image)
 
-    def window(self, min=None, max=None, level=None, width=None, in_place=False):
+    def window(self, min=None, max=None, level=None, width=None, output_min=None, output_max=None, in_place=False):
         """Clip the intensity values of the image using either min/max or level/width
 
         Parameters
@@ -600,6 +613,10 @@ class SmartImage(object):
             Center of the window, by default None
         width : int or float, optional
             Width of the window, by default None
+        output_min: int, optional
+            Minimum value of the output image, by default the same as the clipping window
+        output_max: int, optional
+            Maximum value of the output image, by default the same as the clipping window
         in_place : bool, optional
             Whether to update the image object or return a new image, by default False
 
@@ -615,15 +632,16 @@ class SmartImage(object):
             max = level + (width / 2)
         else:
             raise ValueError('Either min/max or level/width must be set for windowing')
-
+        output_min = min if output_min is None else output_min
+        output_max = max if output_max is None else output_max
         image = self.image
         if self.image_type == 'sitk':
-            result = sitk.IntensityWindowing(image, windowMinimum=min, windowMaximum=max, outputMinimum=min, outputMaximum=max)
+            result = sitk.IntensityWindowing(image, windowMinimum=min, windowMaximum=max, outputMinimum=output_min, outputMaximum=output_max)
         elif self.image_type == 'itk':
             filter = itk.IntensityWindowingImageFilter.New(image)
             filter.SetInput(image)
-            filter.SetOutputMaximum(max)
-            filter.SetOutputMinimum(min)
+            filter.SetOutputMaximum(output_max)
+            filter.SetOutputMinimum(output_min)
             filter.SetWindowMaximum(max)
             filter.SetWindowMinimum(min)
             filter.Update()
@@ -770,7 +788,7 @@ class SmartImage(object):
 
     # Comparison Operators
     def __add__(self, other):
-        return self.__perform_op(sitk.Add, itk.AddImageFilter, other, in_place=False)
+        return self.__perform_op(sitk.Add, itk.AddImageFilter, other, in_place=False, autocast=True)
 
     def __iadd__(self, other):
         result = self.__perform_op(sitk.Add, itk.AddImageFilter, other, in_place=True)
@@ -828,7 +846,7 @@ class SmartImage(object):
             raise ValueError('self.image is type {}'.format(type(image)))
 
     def __sub__(self, other):
-        return self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, in_place=False)
+        return self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, in_place=False, autocast=True)
 
     def __isub__(self, other):
         result = self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, in_place=True)
@@ -836,13 +854,13 @@ class SmartImage(object):
         return self
 
     def __and__(self, other):
-        return self.__perform_op(sitk.And, itk.AndImageFilter, other, in_place=False)
+        return self.__perform_op(sitk.And, itk.AndImageFilter, other, in_place=False, autocast='uint8')
 
     def binary_and(self, other):
         return self.__and__(other)
 
     def __or__(self, other):
-        return self.__perform_op(sitk.Or, itk.OrImageFilter, other, in_place=False)
+        return self.__perform_op(sitk.Or, itk.OrImageFilter, other, in_place=False, autocast='uint8')
 
     def binary_or(self, other):
         return self.__or__(other)
@@ -851,7 +869,7 @@ class SmartImage(object):
         # TODO - add itk version (may need a internal method to run a filter...)
         return self.__perform_op(sitk.ChangeLabel, None, changeMap=changeMap, in_place=in_place)
 
-    def __perform_op(self, sitk_op, itk_op, *args, in_place=False, **kwargs):
+    def __perform_op(self, sitk_op, itk_op, *args, in_place=False, autocast=False, **kwargs):
         """Perform the sitk/itk operation depending on the current image type
 
         Parameters
@@ -862,33 +880,47 @@ class SmartImage(object):
             The itk operation - ex. itk.AddImageFilter, sitk.SubtractImageFilter
         in_place : bool
             If true, update the current image, by default False
+        autocast : Union[bool, str]
+            Can be true to detect output type based on :func:`numpy.result_type`, a string to manually set type, or False to not cast, by default False
 
         Note
         ----
-        All operations are assumed to take an image as their first argument.
         Any SmartImage or Image objects passed as args will be converted before being passed to the op.
 
         """
         image = self.image
+        output_type = self.dtype
         if self.image_type == 'sitk':
             if sitk_op is None:
                 raise NotImplementedError("The SimpleITK version of this operation has not been implemented for SmartImage yet")
             new_args = []
             for item in args:
-                item_type = get_image_type(item)
-                if item_type in ['smartimage', 'itk']:
+                if get_image_type(item) in ['smartimage', 'itk']:
                     item = as_image(item).sitk_image
+                    output_type = np.result_type(output_type, get_dtype(item))
                 new_args.append(item)
+            if autocast:
+                output_type = SmartType.as_sitk(autocast if isinstance(autocast, str) else output_type)
+                for idx in range(len(new_args)):
+                    if get_image_type(new_args[idx]) == 'sitk':
+                        new_args[idx] = sitk.Cast(new_args[idx], output_type)
+                image = sitk.Cast(image, output_type)
             result = sitk_op(image, *new_args, **kwargs)
         elif self.image_type == 'itk':
             if itk_op is None:
                 raise NotImplementedError("The ITK version of this operation has not been implemented for SmartImage yet")
             new_args = []
             for item in args:
-                item_type = get_image_type(item)
-                if item_type in ['smartimage', 'sitk']:
+                if get_image_type(item) in ['smartimage', 'sitk']:
                     item = as_image(item).itk_image
+                    output_type = np.result_type(output_type, get_dtype(item))
                 new_args.append(item)
+            if autocast:
+                output_type = SmartType.as_itk(autocast if isinstance(autocast, str) else output_type)
+                for idx in range(len(new_args)):
+                    if get_image_type(new_args[idx]) == 'itk':
+                        new_args[idx] = itk.CastImageFilter[new_args[idx], output_type].New()(new_args[idx])
+                image = itk.CastImageFilter[image, output_type].New()(image)
             result = itk_op(image, *new_args, **kwargs)
 
         result_type = get_image_type(result)
@@ -902,10 +934,21 @@ class SmartImage(object):
                 warnings.warn('Could not update in-place as result is not an image type')
             return result
 
+    def __setitem__(self, key, val):
+        image = self.image
+        if self.image_type == 'sitk' or self.image_type == 'itk':
+            image[key] = val
+        else:
+            # Should never throw this error
+            raise ValueError('Unknown image type: {}'.format(type(image)))
+
     def __getitem__(self, key):
         image = self.image
         if self.image_type == 'sitk' or self.image_type == 'itk':
-            return SmartImage(image[key])
+            result = image[key]
+            image_type = get_image_type(result)
+            if image_type in ['itk', 'sitk', 'smartimage']:
+                return as_image(result)
         else:
             # Should never throw this error
             raise ValueError('Unknown image type: {}'.format(type(image)))

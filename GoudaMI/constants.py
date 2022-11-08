@@ -68,7 +68,9 @@ class SmartType():
 
     @staticmethod
     def to_uniform(data_type):
-        if 'numpy' in str(data_type) or isinstance(data_type, np.dtype):
+        if isinstance(data_type, np.dtype):
+            data_type = str(data_type)  # strings keys are the same as numpy string equivalents
+        if 'numpy' in str(data_type):
             item_type = SmartType.numpy2uniform.get(data_type, -2)
             if item_type != -2:
                 return item_type
@@ -82,13 +84,13 @@ class SmartType():
             item_type = SmartType.sitk2uniform.get(data_type, -2)
             if item_type != -2:
                 return item_type
-        elif isinstance(data_type, str):
+        elif isinstance(data_type, str):  # TODO - check for SimpleITK strings, ie image.GetPixelIDTypeAsString()
             item_type = SmartType.string2uniform.get(data_type, -2)
             if item_type == -1:
                 raise ValueError(f'`int` and `float` types are not supported. Please use `int32`, `int64`, `float32`, and `float64` instead.')
             elif item_type != -2:
                 return item_type
-        raise ValueError(f'Unknown data type: `{data_type}`')
+        raise ValueError(f'Unknown data type: `{data_type}`', type(data_type))
 
     @staticmethod
     def as_numpy(data_type):
