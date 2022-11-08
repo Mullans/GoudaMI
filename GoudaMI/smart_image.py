@@ -368,6 +368,16 @@ class SmartImage(object):
         elif self.image_type == 'itk':
             return itk.GetArrayFromMatrix(image.GetDirection()).flatten()
 
+    def TransformIndexToPhysicalPoint(self, index):
+        if not self.loaded:
+            shift = (self.GetDirectionMatrix() * (self.GetSpacing() * np.eye(self.ndim))) @ np.asarray(index)
+            return self.GetOrigin() + shift
+        image = self.image
+        if self.image_type == 'sitk':
+            return np.array(image.TransformIndexToPhysicalPoint(index))
+        elif self.image_type == 'itk':
+            return np.array(image.TransformIndexToPhysicalPoint(index))
+
     def SetDirection(self, direction):
         if self.image_type == 'sitk':
             if isinstance(direction, (tuple, list)) or (isinstance(direction, np.ndarray) and direction.ndim == 1):

@@ -374,7 +374,9 @@ def compare_physical(image1, image2):
     if info1.keys() != info2.keys():
         raise ValueError('Mismatched keys between images')
     for key in info1.keys():
-        if isinstance(info1[key], Iterable):
+        if isinstance(info1[key], np.ndarray):
+            key_check = np.allclose(info1[key], info2[key])
+        elif isinstance(info1[key], Iterable):
             key_check = tuple(info1[key]) == tuple(info2[key])
         else:
             key_check = info1[key] == info2[key]
