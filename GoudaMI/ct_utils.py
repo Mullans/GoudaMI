@@ -85,36 +85,6 @@ def quick_erode(img, radius=3):
     return dil_filter.Execute(img)
 
 
-def mask_body(image, opening_size=1):
-    """Generate a mask of the body in a 3D CT"""
-    image_type = get_image_type(image)
-    if image_type != 'sitk':
-        image = as_image(image).sitk_image
-    bin_img = sitk.RecursiveGaussian(image, 3)
-    bin_img = sitk.BinaryThreshold(bin_img, -500, 10000, 1, 0)
-    if opening_size > 0:
-        bin_img = sitk.BinaryMorphologicalOpening(bin_img, [opening_size] * image.GetDimension(), sitk.sitkBall, 0, 1)
-    labels = sitk.ConnectedComponent(bin_img)
-    lfilter = sitk.LabelShapeStatisticsImageFilter()
-    lfilter.SetComputePerimeter(False)
-    lfilter.Execute(labels)
-    body_label = [-1, -1]
-    for label in lfilter.GetLabels():
-        label_area = lfilter.GetNumberOfPixels(label)
-        if label_area > body_label[1]:
-            body_label = [label, label_area]
-    bin_img = sitk.Equal(labels, body_label[0])
-    bin_img = sitk.BinaryMorphologicalClosing(bin_img, [3] * image.GetDimension(), sitk.sitkBall, 1)
-    filled_labels = fill2d(bin_img)
-    if image_type != 'sitk':
-        filled_labels = as_image(filled_labels)
-        if image_type == 'numpy':
-            filled_labels = filled_labels.as_array()
-        elif image_type == 'itk':
-            filled_labels = filled_labels.itk_image
-    return filled_labels
-
-
 def faster_mask_body(image, resample=True):
     # Note - rounding error may cut off the top slice during resampling
     image_type = get_image_type(image)
@@ -150,7 +120,7 @@ def faster_mask_body(image, resample=True):
 
 def crop_image_to_mask(image: ImageType, mask: Optional[Union[ImageType, np.ndarray]] = None, crop_z=False, crop_quantile=50, return_bounds=False):
     if mask is None:
-        mask = mask_body(image)
+        mask = faster_mask_body(image)
     mask = as_view(mask)
 
     front_view = mask.max(axis=1)

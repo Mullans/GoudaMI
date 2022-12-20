@@ -9,7 +9,7 @@ import SimpleITK as sitk
 from GoudaMI.constants import MIN_INTENSITY_PULMONARY_CT
 from GoudaMI.convert import as_array
 from GoudaMI.ct_utils import resample_to_ref, resample_rescale
-from GoudaMI.smart_image import SmartImage
+from GoudaMI.smart_image import SmartImage, as_image, get_image_type
 
 
 def quick_save(data: Any, label=None, skip_existing_filenames=False):
@@ -235,8 +235,8 @@ def segment_lungs(image, lower_threshold=-940, max_ratio=100, downscale=True):
     downscale : bool
         If true, the image will be downscaled by half before segmentation to speed up the operation, but a full-size result will be returned (the default is False)
     """
-    from .io import read_image
-    from .ct_utils import mask_body, clip_image, otsu_threshold
+    from GoudaMI.io import read_image
+    from GoudaMI.ct_utils import mask_body, clip_image, otsu_threshold
     if isinstance(image, str):
         image = read_image(image)
     elif not isinstance(image, sitk.Image):
@@ -361,18 +361,6 @@ def array_get_distances(image_1, image_2, sampling=1, connectivity=1):
     return np.concatenate([np.ravel(dta[surf_2 != 0]), np.ravel(dtb[surf_1 != 0])])
 
 
-def get_total_hull(arr):
-    """Get a convex hull encompasing all foreground of a 2d label"""
-    import cv2
-    result = np.zeros_like(arr)
-    if arr.sum() == 0:
-        return result
-    contours, hierarchy = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    full_hull = cv2.convexHull(np.concatenate(contours, axis=0), False)
-    cv2.drawContours(result, [full_hull], -1, 1, -1)
-    return result
-
-
 def fill2d(arr, force_slices=False):
     # TODO - update this to not require scipy
     import scipy.ndimage.morphology
@@ -389,6 +377,36 @@ def fill2d(arr, force_slices=False):
         filled = scipy.ndimage.binary_fill_holes(check_slice)
         output[idx] = filled
     return output
+
+
+def mask_body(image, opening_size=1):
+    """Generate a mask of the body in a 3D CT"""
+    image_type = get_image_type(image)
+    if image_type != 'sitk':
+        image = as_image(image).sitk_image
+    bin_img = sitk.RecursiveGaussian(image, 3)
+    bin_img = sitk.BinaryThreshold(bin_img, -500, 10000, 1, 0)
+    if opening_size > 0:
+        bin_img = sitk.BinaryMorphologicalOpening(bin_img, [opening_size] * image.GetDimension(), sitk.sitkBall, 0, 1)
+    labels = sitk.ConnectedComponent(bin_img)
+    lfilter = sitk.LabelShapeStatisticsImageFilter()
+    lfilter.SetComputePerimeter(False)
+    lfilter.Execute(labels)
+    body_label = [-1, -1]
+    for label in lfilter.GetLabels():
+        label_area = lfilter.GetNumberOfPixels(label)
+        if label_area > body_label[1]:
+            body_label = [label, label_area]
+    bin_img = sitk.Equal(labels, body_label[0])
+    bin_img = sitk.BinaryMorphologicalClosing(bin_img, [3] * image.GetDimension(), sitk.sitkBall, 1)
+    filled_labels = fill2d(bin_img)
+    if image_type != 'sitk':
+        filled_labels = as_image(filled_labels)
+        if image_type == 'numpy':
+            filled_labels = filled_labels.as_array()
+        elif image_type == 'itk':
+            filled_labels = filled_labels.itk_image
+    return filled_labels
 
 
 def fill_slices(arr, dilate=0, erode=0, axis=0):
