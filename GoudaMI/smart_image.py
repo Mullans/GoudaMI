@@ -1012,7 +1012,7 @@ def as_image_type(image: ImageArrayType, output_type: str) -> ImageArrayType:
     elif output_type == 'itk':
         return as_image(image).itk_image
     elif output_type == 'numpy':
-        return as_image(image).numpy_image
+        return as_image(image).as_array()
     elif output_type == 'smartimage':
         return as_image(image)
     else:

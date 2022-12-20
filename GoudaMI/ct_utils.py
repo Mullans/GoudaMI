@@ -644,6 +644,8 @@ def get_bounds(label: ImageType, bg_val: float = 0) -> List[Tuple[int, int]]:
         pass
     else:
         label = as_image(label).sitk_image
+    if label.GetPixelID() != sitk.sitkUInt8:
+        label = sitk.Cast(label != bg_val, sitk.sitkUInt8)
     ndim = label.GetDimension()
     filt = sitk.LabelShapeStatisticsImageFilter()
     filt.SetComputePerimeter(False)
