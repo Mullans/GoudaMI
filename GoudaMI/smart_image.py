@@ -5,6 +5,7 @@ import warnings
 from typing import List, Optional, Union
 
 import numpy as np
+import numpy.typing as npt
 import SimpleITK as sitk
 
 from GoudaMI.constants import SmartType
@@ -27,8 +28,14 @@ def get_image_type(image):
         return 'smartimage'
     elif 'vtkPolyData' in type_str:
         return 'vtk_polydata'
-    elif "<class 'dict'>":
+    elif "<class 'dict'>" == type_str:
         return 'dict'
+    elif 'goudapath' in type_str:
+        return 'goudapath'
+    elif isinstance(image, os.PathLike):
+        return 'path'  # this should very rarely get hit
+    elif "<class 'str'>" == type_str:
+        return 'string'  # this could get hit for paths?
     else:
         return None
 
@@ -227,7 +234,13 @@ class SmartImage(object):
     @property
     def image_type(self):
         if self.__image_type is None:
-            return self.default_type
+            if self.__itk_image is None and self.__sitk_image is not None:
+                return 'sitk'
+            elif self.__itk_image is not None and self.__sitk_image is None:
+                return 'itk'
+            else:
+                # Should it return something else if neither is loaded?
+                return self.default_type
         return self.__image_type
 
     @property
@@ -392,6 +405,7 @@ class SmartImage(object):
             return np.array(image.TransformIndexToPhysicalPoint(index))
 
     def SetDirection(self, direction):
+        self.image  # load the image if necessary
         if self.image_type == 'sitk':
             if isinstance(direction, (tuple, list)) or (isinstance(direction, np.ndarray) and direction.ndim == 1):
                 pass  # assume from another sitk.Image or SmartImage
@@ -538,6 +552,11 @@ class SmartImage(object):
         label_filt.Execute(self.sitk_image)
         self.__unique_labels = label_filt.GetLabels()
         return label_filt
+
+    @property
+    def cc(self) -> sitk.ConnectedComponentImageFilter:
+        """Short-hand for connected components so we can do ``image.cc.GetNumberOfObjects()`` or similar"""
+        return self.connected_components(fully_connected=False, in_place=False)
 
     def connected_components(self, fully_connected=False, in_place=False):
         # TODO - add itk version, may need internal method to wrap filter
@@ -742,13 +761,15 @@ class SmartImage(object):
         resampleFilter = sitk.ResampleImageFilter()
         resampleFilter.SetInterpolator(interp)
         resampleFilter.SetDefaultPixelValue(outside_val)
-        if isinstance(ref, SmartImage) and not ref.loaded:
+        ref_type = get_image_type(ref)
+        if ref_type == 'smartimage' and not ref.loaded:
             ref = ref.path
-        if isinstance(ref, SmartImage):
+            ref_type = 'path'
+        if ref_type == 'smartimage':
             resampleFilter.SetReferenceImage(ref.sitk_image)
-        elif isinstance(ref, sitk.Image):
+        elif ref_type == 'sitk':
             resampleFilter.SetReferenceImage(ref)
-        elif 'goudapath' in str(type(ref)):
+        elif ref_type in ['goudapath', 'path', 'string']:
             ref = str(ref)
             if os.path.isdir(ref):
                 dicom_files = sorted(glob.glob(os.path.join(ref, '*.dcm')))
@@ -762,17 +783,17 @@ class SmartImage(object):
             resampleFilter.SetOutputOrigin(file_reader.GetOrigin())
             resampleFilter.SetOutputSpacing(file_reader.GetSpacing())
             resampleFilter.SetOutputDirection(file_reader.GetDirection())
-        elif isinstance(ref, (sitk.ImageFileReader)):
+        elif ref_type == 'sitkreader':
             resampleFilter.SetSize(ref.GetSize())
             resampleFilter.SetOutputOrigin(ref.GetOrigin())
             resampleFilter.SetOutputSpacing(ref.GetSpacing())
             resampleFilter.SetOutputDirection(ref.GetDirection())
-        elif isinstance(ref, dict):
+        elif ref_type == 'dict':
             resampleFilter.SetSize([int(item) for item in ref['size']])
             resampleFilter.SetOutputOrigin(ref['origin'])
             resampleFilter.SetOutputSpacing(ref['spacing'])
             resampleFilter.SetOutputDirection(ref['direction'])
-        elif isinstance(ref, SmartImage):
+        elif ref_type == 'smartimage':
             resampleFilter.SetSize(ref.GetSize().tolist())
             resampleFilter.SetOutputOrigin(ref.GetOrigin())
             resampleFilter.SetOutputSpacing(ref.GetSpacing())
@@ -791,8 +812,8 @@ class SmartImage(object):
         return self.__perform_op(sitk.Add, itk.AddImageFilter, other, in_place=False, autocast=True)
 
     def __iadd__(self, other):
-        result = self.__perform_op(sitk.Add, itk.AddImageFilter, other, in_place=True)
-        self.update(result)
+        self.__perform_op(sitk.Add, itk.AddImageFilter, other, in_place=True)
+        # self.update(result)  # TODO - check that inplace ops are working
         return self
 
     def __eq__(self, other):
@@ -834,6 +855,9 @@ class SmartImage(object):
     # def __rmul__(self, other):
         # This would be [other * self] rather than [self * other] - do we want this?
 
+    def __truediv__(self, other):
+        return self.__perform_op(sitk.Divide, itk.DivideImageFilter, other, in_place=False)
+
     def __ne__(self, other):
         image = self.image
         if self.image_type == 'sitk':
@@ -849,8 +873,8 @@ class SmartImage(object):
         return self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, in_place=False, autocast=True)
 
     def __isub__(self, other):
-        result = self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, in_place=True)
-        self.update(result)
+        self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, in_place=True)
+        # self.update(result)
         return self
 
     def __and__(self, other):
@@ -969,15 +993,30 @@ class SmartImage(object):
 
 
 ImageType = Union[SmartImage, itk.Image, sitk.Image]
+ImageArrayType = Union[SmartImage, itk.Image, sitk.Image, npt.NDArray]
 ImageRefType = Union[SmartImage, itk.Image, sitk.Image, dict, sitk.ImageFileReader]
 
 
-def as_image(image: Union[itk.Image, sitk.Image, SmartImage, np.ndarray]) -> SmartImage:
+def as_image(image: ImageArrayType) -> SmartImage:
     """Wrap an image as a SmartImage"""
     if not isinstance(image, SmartImage):
         return SmartImage(image)
     else:
         return image
+
+
+def as_image_type(image: ImageArrayType, output_type: str) -> ImageArrayType:
+    """Convert an image to a specific type"""
+    if output_type == 'sitk':
+        return as_image(image).sitk_image
+    elif output_type == 'itk':
+        return as_image(image).itk_image
+    elif output_type == 'numpy':
+        return as_image(image).numpy_image
+    elif output_type == 'smartimage':
+        return as_image(image)
+    else:
+        raise ValueError('Invalid image type: {}'.format(output_type))
 
 
 def zeros_like(image: Union[itk.Image, sitk.Image, SmartImage, dict], dtype: Optional[str] = None):

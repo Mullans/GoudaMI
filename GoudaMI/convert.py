@@ -11,7 +11,7 @@ import numpy as np
 import SimpleITK as sitk
 
 from GoudaMI.optional_imports import itk, vtk
-from GoudaMI.smart_image import SmartImage, get_image_type, ImageType
+from GoudaMI.smart_image import SmartImage, get_image_type, as_image, as_image_type, ImageType
 
 # TODO - create wrap4XXX for itk, sitk, and vtk to take any format, convert to chosen, and return as original format
 
@@ -128,20 +128,9 @@ def wrap_sitk(func):
     """Wrap a method that takes a SimpleITK.Image and returns anything so that it takes any image and returns the method return type"""
     @functools.wraps(func)
     def wrapped_func(image, *args, **kwargs):
-        return_type = ''
-        if isinstance(image, SmartImage):
-            image = image.image
-        if isinstance(image, sitk.Image):
-            pass
-        elif isinstance(image, itk.Image):
-            image = itk2sitk(image)
-        elif isinstance(image, np.ndarray):
-            warnings.warn('Treating an array as an image ignores any physical parameters (origin, spacing, etc).')
-            image = sitk.GetImageFromArray(image)
-        else:
-            raise ValueError('Unknown image type: {}'.format(type(image)))
-
-        return func(image, *args, **kwargs)
+        return_type = get_image_type(image)
+        result = func(as_image(image).sitk_image, *args, **kwargs)
+        return as_image_type(result, return_type)
     return wrapped_func
 
 
