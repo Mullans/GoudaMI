@@ -1,17 +1,18 @@
 import glob
 import os
 import warnings
-from collections.abc import Iterable
-from typing import Any, List, Optional, Tuple, Union
+from collections.abc import Sequence
+from typing import List, Optional, Tuple, Union
 
+import gouda
 import numpy as np
 import SimpleITK as sitk
 
 from GoudaMI import io
 from GoudaMI.constants import MIN_INTENSITY_PULMONARY_CT, SmartType
-from GoudaMI.convert import as_view, wrap_numpy2numpy
+from GoudaMI.convert import as_view, wrap_numpy2numpy, wrap_sitk
 from GoudaMI.optional_imports import itk
-from GoudaMI.smart_image import (ImageRefType, ImageType, SmartImage, as_image, get_image_type, zeros_like)
+from GoudaMI.smart_image import (ImageRefType, ImageType, SmartImage, as_image, as_image_type, get_image_type, zeros_like)
 
 # NOTE - reference for some interfacing: https://github.com/SimpleITK/SimpleITK/blob/4aabd77bddf508c1d55519fbf6002180a08f9208/Wrapping/Python/Python.i#L764-L794
 
@@ -346,7 +347,7 @@ def compare_physical(image1, image2):
     for key in info1.keys():
         if isinstance(info1[key], np.ndarray):
             key_check = np.allclose(info1[key], info2[key])
-        elif isinstance(info1[key], Iterable):
+        elif gouda.is_iter(info1[key]):
             key_check = tuple(info1[key]) == tuple(info2[key])
         else:
             key_check = info1[key] == info2[key]
@@ -782,6 +783,18 @@ def remove_small_items(label_img, min_size=20):
         return result
 
 
+def get_total_hull(arr):
+    """Get a convex hull encompasing all foreground of a 2d label"""
+    import cv2
+    result = np.zeros_like(arr)
+    if arr.sum() == 0:
+        return result
+    contours, hierarchy = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    full_hull = cv2.convexHull(np.concatenate(contours, axis=0), False)
+    cv2.drawContours(result, [full_hull], -1, 1, -1)
+    return result
+
+
 def get_label_hull(label):
     """Get the convex hull of each slice of a label image"""
     if isinstance(label, SmartImage):
@@ -945,7 +958,7 @@ def check_small_diff(img1: sitk.Image, img2: sitk.Image, threshold: float = 1e-4
 
 
 def histeresis_threshold(prob_map, lower_thresh, peak_thresh, min_peak_size=100):
-    #TODO - clean up
+    # TODO - clean up
     if isinstance(prob_map, SmartImage):
         prob_map = prob_map.sitk_image
     minimum, maximum = get_value_range(prob_map)
@@ -1120,3 +1133,46 @@ def repair_label(raw_label: SmartImage, skip_labels: dict, border_tol: float = 1
 
     raw_label = raw_label + sitk.ChangeLabel(to_check_label.sitk_image, changeMap=change_map)
     return raw_label
+
+
+def multiply_vector_image(image: sitk.Image, scalar: Union[float, Sequence[float]]) -> sitk.Image:
+    """Multiply a vector image by a scalar
+
+    Parameters
+    ----------
+    image : sitk.Image
+        vector image to multiply
+    scalar : Union[float, Sequence[float]]
+        The scalar or list of scalars to multiply by
+    """
+    if not gouda.is_iter(scalar):
+        scalar = (scalar,) * image.GetNumberOfComponentsPerPixel()
+    assert len(scalar) == image.GetNumberOfComponentsPerPixel(), "Scalar must be a single value or a sequence of values the same length as the number of components in the image"
+    return sitk.Compose([sitk.VectorIndexSelectionCast(image, i) * scalar[i % len(scalar)] for i in range(image.GetNumberOfComponentsPerPixel())])
+
+
+@wrap_sitk
+def elastic_deformation(image: ImageType, sigma: Union[float, tuple[float, ...]] = 1.0, alpha: Union[float, tuple[float, ...]] = 2.0, interp=sitk.sitkLinear) -> sitk.Image:
+    """Perform a random elastic deformation on the image.
+
+    Parameters
+    ----------
+    image : ImageType
+        Image to deform
+    sigma : Union[float, tuple[float, ...]], optional
+        The smoothness of the deformation - higher is smoother, by default 1.0
+    alpha : Union[float, tuple[float, ...]], optional
+        The magnitude of the deformation, by default 2.0
+
+    NOTE
+    ----
+    sigma and alpha can either be single float values or tuples of values for each dimension
+    """
+    deformation = np.random.rand(*image.GetSize(), image.GetDimension()) * 2 - 1
+    def_image = sitk.GetImageFromArray(deformation, isVector=True)
+    def_image = sitk.SmoothingRecursiveGaussian(def_image, sigma=sigma)
+    def_image = multiply_vector_image(def_image, alpha)
+
+    warp_filt = sitk.WarpImageFilter()
+    warp_filt.SetInterpolator(interp)
+    return warp_filt.Execute(image, def_image)

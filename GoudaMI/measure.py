@@ -4,9 +4,7 @@ import numpy as np
 import SimpleITK as sitk
 
 from GoudaMI.ct_utils import get_unique_labels
-from GoudaMI.smart_image import SmartImage
-
-ImageTypeS = Union[sitk.Image, SmartImage]
+from GoudaMI.smart_image import SmartImage, ImageType, as_image, get_image_type
 
 
 def get_centroid_metrics(label_image, pred_image, return_centroids=False, return_sizes=False):
@@ -16,10 +14,10 @@ def get_centroid_metrics(label_image, pred_image, return_centroids=False, return
     ----
     distances are indexed by [label val - 1, pred val - 1] - so if the value of the object in the label image is 2 and the value is 4 in the predicted image, the distance between the two is at dist_arr[1, 3] (since 0 is the bg value, we skip it)
     """
-    if isinstance(label_image, SmartImage):
-        label_image = label_image.sitk_image
-    if isinstance(pred_image, SmartImage):
-        pred_image = pred_image.sitk_image
+    if get_image_type(label_image) != 'sitk':
+        label_image = as_image(label_image).sitk_image
+    if get_image_type(pred_image) != 'sitk':
+        pred_image = as_image(pred_image).sitk_image
     filter1 = sitk.LabelShapeStatisticsImageFilter()
     filter1.Execute(label_image)
 
@@ -53,10 +51,10 @@ def get_centroid_metrics(label_image, pred_image, return_centroids=False, return
 
 
 def get_comparison_metrics(label_image, pred_image, overlap_metrics=True, distance_metrics=True, fully_connected=True, labels=None):
-    if isinstance(label_image, SmartImage):
-        label_image = label_image.sitk_image
-    if isinstance(pred_image, SmartImage):
-        pred_image = pred_image.sitk_image
+    if get_image_type(label_image) != 'sitk':
+        label_image = as_image(label_image).sitk_image
+    if get_image_type(pred_image) != 'sitk':
+        pred_image = as_image(pred_image).sitk_image
     if labels is None:
         label_filt = sitk.LabelShapeStatisticsImageFilter()
         label_filt.Execute(label_image)
@@ -85,7 +83,7 @@ def get_comparison_metrics(label_image, pred_image, overlap_metrics=True, distan
     return image_results
 
 
-def get_binary_distance_metrics(label_image, pred_image, fully_connected=False, label=None):
+def get_binary_distance_metrics(label_image, pred_image, fully_connected=False, label=None, detailed=False):
     """Get distance-based metrics between the label and predicted label
 
     Parameters
@@ -96,6 +94,8 @@ def get_binary_distance_metrics(label_image, pred_image, fully_connected=False, 
         The predicted label image
     label : int or None
         The label of interest to find metrics for - if None, assumes the labels are already binary
+    detailed : bool
+        If True, also finds mean, median, and max surface-to-surface distances
     """
     if isinstance(label_image, SmartImage):
         label_image = label_image.sitk_image
@@ -110,12 +110,10 @@ def get_binary_distance_metrics(label_image, pred_image, fully_connected=False, 
     label_image = sitk.ConstantPad(label_image, [1, 1, 1], [1, 1, 1], 0)
     pred_image = sitk.ConstantPad(pred_image, [1, 1, 1], [1, 1, 1], 0)
 
-    # label_dist = sitk.SignedDanielssonDistanceMap(label_image, squaredDistance=False, useImageSpacing=True)
     label_dist = sitk.SignedMaurerDistanceMap(
         label_image, squaredDistance=False, useImageSpacing=True)
     label_surf = sitk.LabelContour(label_image, fullyConnected=fully_connected)
 
-    # pred_dist = sitk.SignedDanielssonDistanceMap(pred_image, squaredDistance=False, useImageSpacing=True)
     pred_dist = sitk.SignedMaurerDistanceMap(
         pred_image, squaredDistance=False, useImageSpacing=True)
     pred_surf = sitk.LabelContour(pred_image, fullyConnected=fully_connected)
@@ -125,14 +123,9 @@ def get_binary_distance_metrics(label_image, pred_image, fully_connected=False, 
     if label_surf_arr.sum() == 0 or pred_surf_arr.sum() == 0:
         mean_abs_pred_dist = np.nan
         mean_rel_pred_dist = np.nan
-        mean_abs_s2s_dist = np.nan
-        median_abs_s2s_dist = np.nan
-        max_abs_s2s_dist = np.nan
         haus_dist = np.nan
         haus_95 = np.nan
-
-        # haus_sitk = np.nan
-        # avg_haus_sitk = np.nan
+        all_dist_arr = None
     else:
         pred2label_arr = sitk.GetArrayViewFromImage(label_dist)[pred_surf_arr]
         label2pred_arr = sitk.GetArrayViewFromImage(pred_dist)[label_surf_arr]
@@ -148,31 +141,24 @@ def get_binary_distance_metrics(label_image, pred_image, fully_connected=False, 
 
         # Distance from each prediction voxel to the nearest label voxel and from each label voxel to the nearest prediction voxel
         # Max is similar to Hausdorff, but includes predicted boundary inside of label boundary as error
-        mean_abs_s2s_dist = np.mean(np.abs(all_dist_arr))
-        median_abs_s2s_dist = np.median(np.abs(all_dist_arr))
-        max_abs_s2s_dist = np.max(np.abs(all_dist_arr))
         haus_dist = np.max(np.maximum(all_dist_arr, 0))
         haus_95 = np.percentile(np.maximum(all_dist_arr, 0), [95])[0]
 
-        # Just to validate hausdorff
-        # hausdorff_filter = sitk.HausdorffDistanceImageFilter()
-        # hausdorff_filter.Execute(label_image, pred_image)
-        # haus_sitk = float(hausdorff_filter.GetHausdorffDistance())
-        # avg_haus_sitk = float(hausdorff_filter.GetAverageHausdorffDistance())
-
     results = {
-        # 'MeanAbsolutePredictionDistance': mean_abs_pred_dist,
-        'ASSD': mean_abs_pred_dist,
-        # 'MeanRelativePredictionDistance': mean_rel_pred_dist,
-        'SSSD': mean_rel_pred_dist,
-        'MeanSurfaceToSurfaceDistance': mean_abs_s2s_dist,
-        'MedianSurfaceToSurfaceDistance': median_abs_s2s_dist,
-        'MaxSurfaceToSurfaceDistance': max_abs_s2s_dist,
+        'ASSD': mean_abs_pred_dist,  # AKA - mean absolute prediction distance
+        'SSSD': mean_rel_pred_dist,  # AKA - mean relative prediction distance
         'HausdorffDistance': haus_dist,
         'HausdorffDistance95': haus_95,
-        # 'HausdorffDistance_SITK': haus_sitk,
-        # 'AverageHausdorffDistance_SITK': avg_haus_sitk
     }
+    if detailed:
+        if all_dist_arr is None:
+            results['MeanSurfaceToSurfaceDistance'] = np.nan
+            results['MedianSurfaceToSurfaceDistance']: np.nan
+            results['MaxSurfaceToSurfaceDistance'] = np.nan
+        else:
+            results['MeanSurfaceToSurfaceDistance'] = np.mean(np.abs(all_dist_arr))
+            results['MedianSurfaceToSurfaceDistance']: np.median(np.abs(all_dist_arr))
+            results['MaxSurfaceToSurfaceDistance'] = np.max(np.abs(all_dist_arr))
     return results
 
 
@@ -252,7 +238,7 @@ def get_object_comparison_metrics(true_label, pred_label, dtype=sitk.sitkUInt8, 
     return overlap_metrics
 
 
-def bilateral_overlap_stats(label1: ImageTypeS, label2: ImageTypeS) -> Tuple[dict, dict]:
+def bilateral_overlap_stats(label1: ImageType, label2: ImageType) -> Tuple[dict, dict]:
     """Get overlap stats between two images
 
     Parameters
