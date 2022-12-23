@@ -1,9 +1,10 @@
+from collections.abc import Sequence
 import glob
-# import importlib
 import os
 import warnings
 from typing import List, Optional, Union
 
+import gouda
 import numpy as np
 import numpy.typing as npt
 import SimpleITK as sitk
@@ -147,9 +148,9 @@ class SmartImage(object):
             self.path = path
         # self.image
 
-    def __reset_internals(self, direction_only=False):
-        if direction_only:
-            # NOTE - only reset values where direction matters. None currently
+    def __reset_internals(self, spatial_only=False):
+        if spatial_only:
+            # NOTE - only reset values where direction/origin matters. None currently
             return
         self.__minimum_intensity = None
         self.__maximum_intensity = None
@@ -383,6 +384,21 @@ class SmartImage(object):
             }
         return self.__meta_data[key]
 
+    def TransformIndexToPhysicalPoint(self, index):
+        index = np.asarray(index)
+        if not self.loaded:
+            shift = (self.GetDirectionMatrix() * (self.GetSpacing() * np.eye(self.ndim))) @ index
+            return self.GetOrigin() + shift
+        image = self.image
+        if self.image_type == 'sitk' or self.image_type == 'itk':
+            if np.issubdtype(index.dtype, np.floating):
+                return np.array(image.TransformContinuousIndexToPhysicalPoint(index.tolist()))
+            else:
+                return np.array(image.TransformIndexToPhysicalPoint(index.tolist()))
+        else:
+            # This should never happen
+            raise ValueError('Unknown image type: {}'.format(self.image_type))
+
     def GetDirection(self):
         if not self.loaded:
             direction = self.__load_meta('direction')
@@ -393,16 +409,6 @@ class SmartImage(object):
             return np.array(image.GetDirection())
         elif self.image_type == 'itk':
             return itk.GetArrayFromMatrix(image.GetDirection()).flatten()
-
-    def TransformIndexToPhysicalPoint(self, index):
-        if not self.loaded:
-            shift = (self.GetDirectionMatrix() * (self.GetSpacing() * np.eye(self.ndim))) @ np.asarray(index)
-            return self.GetOrigin() + shift
-        image = self.image
-        if self.image_type == 'sitk':
-            return np.array(image.TransformIndexToPhysicalPoint(index))
-        elif self.image_type == 'itk':
-            return np.array(image.TransformIndexToPhysicalPoint(index))
 
     def SetDirection(self, direction):
         self.image  # load the image if necessary
@@ -432,7 +438,7 @@ class SmartImage(object):
                 raise TypeError('Unknown direction type: {}'.format(type(direction)))
             self.__itk_image.SetDirection(direction)
             self.__updated_itk = True
-        self.__reset_internals(direction_only=True)
+        self.__reset_internals(spatial_only=True)
 
     def GetDirectionMatrix(self):
         image = self.image
@@ -465,14 +471,23 @@ class SmartImage(object):
                 return origin
         return np.array(self.image.GetOrigin())
 
+    def SetOrigin(self, origin):
+        self.image  # load the image if necessary
+        if self.image_type == 'sitk':
+            self.__sitk_image.SetOrigin(origin)
+            self.__updated_sitk = True
+        elif self.image_type == 'itk':
+            self.__itk_image.SetOrigin(origin)
+            self.__updated_itk = True
+        self.__reset_internals(spatial_only=True)
+
     def GetOppositeCorner(self):
         """Return the coordinates of the corner opposite to the origin"""
-        # TODO - double check that this is correct, Slicer seems to disagree
-        size = self.GetPhysicalSize()
-        # TODO - update if needed, this assumes only 180 flipped directions
-        direction = self.GetDirectionMatrix()
-        direction = np.array([direction[i, i] for i in range(direction.shape[0])])
-        return self.GetOrigin() + size * direction
+        return self.TransformIndexToPhysicalPoint(self.GetSize().tolist())
+
+    def GetCenter(self):
+        """Return the coordinates of the center of the image"""
+        return self.TransformIndexToPhysicalPoint((self.GetSize() / 2).tolist())
 
     def GetSize(self):
         if not self.loaded:
@@ -801,6 +816,83 @@ class SmartImage(object):
         else:
             raise ValueError("Unknown reference type: '{}'".format(type(ref)))
         result = resampleFilter.Execute(image)
+        if in_place:
+            self.update(result)
+            return self
+        else:
+            return SmartImage(result)
+
+    def euler_transform(self,
+                        rotation: Union[Sequence[float], npt.NDArray[np.floating]] = (0., ),
+                        translation: Union[Sequence[int], npt.NDArray[np.integer]] = (0., ),
+                        center: Optional[Sequence[float]] = None,
+                        as_degrees: bool = False,
+                        relative_translation: bool = False,
+                        interp: Union[int, str] = 'auto',
+                        outside_val: float = 0,
+                        in_place: bool = False):
+        """Apply a Euler Transform to the image
+
+        Parameters
+        ----------
+        rotation : Union[Sequence[float], npt.NDArray[np.floating]], optional
+            The rotation to apply along each axis, by default (0., )
+        translation : Union[Sequence[int], npt.NDArray[np.integer]], optional
+            The translation to apply along each axis, by default (0., )
+        center : Optional[Sequence[float]], optional
+            The center of the rotations, if None uses the image center, by default None
+        as_degrees : bool, optional
+            If True, assumes rotation is given in degrees, by default False
+        relative_translation: bool, optional
+            If True, translations are treated as a percent of the image size, by default False
+        interp: Union[int, str], optional
+            The interpolation to use, by default 'auto'
+        outside_val: float, optional
+            The default pixel value to use for edges, by default 0
+        in_place : bool, optional
+            Whether to update the underlying image, by default False
+        """
+        # TODO - add "straighten" function to align image to default rot. matrix
+        if self.ndim != 3:
+            raise NotImplementedError('SmartImage.euler_transform has only been added for 3D so far')
+        if len(rotation) == 1:
+            rotation = gouda.force_len(rotation, self.ndim)
+        if len(translation) == 1:
+            translation = gouda.force_len(translation, self.ndim)
+        if len(rotation) != self.ndim or len(translation) != self.ndim:
+            raise ValueError('Rotation and translation must be the same length as the image dimension')
+
+        rotation = np.array(rotation)
+        if as_degrees:
+            rotation = np.deg2rad(rotation)
+        translation = np.array(translation)
+        if relative_translation:
+            translation = translation * self.GetSize()
+
+        if center is None:
+            center = self.GetCenter()
+        if self.ndim == 3:
+            transform = sitk.Euler3DTransform()
+        else:
+            raise NotImplementedError('SmartImage.euler_transform has only been added for 3D so far')
+
+        transform.SetCenter(center)
+        transform.SetRotation(*rotation.tolist())
+        transform.SetTranslation(translation.tolist())
+
+        if interp == 'auto':
+            if self.min() >= 0 and self.max() < 255 and 'f' not in str(self.dtype):
+                #  This should be a label
+                interp = sitk.sitkNearestNeighbor
+            else:
+                # This should be an image
+                interp = sitk.sitkBSpline
+        resample_filter = sitk.ResampleImageFilter()
+        resample_filter.SetReferenceImage(self.sitk_image)
+        resample_filter.SetTransform(transform)
+        resample_filter.SetInterpolator(interp)
+        resample_filter.SetDefaultPixelValue(outside_val)
+        result = resample_filter.Execute(self.sitk_image)
         if in_place:
             self.update(result)
             return self

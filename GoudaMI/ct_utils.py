@@ -1,4 +1,5 @@
 import glob
+import functools
 import os
 import warnings
 from collections.abc import Sequence
@@ -6,6 +7,7 @@ from typing import List, Optional, Tuple, Union
 
 import gouda
 import numpy as np
+import numpy.typing as npt
 import SimpleITK as sitk
 
 from GoudaMI import io
@@ -1154,7 +1156,7 @@ def multiply_vector_image(image: sitk.Image, scalar: Union[float, Sequence[float
 
 
 @wrap_sitk
-def elastic_deformation(image: ImageType, sigma: Union[float, tuple[float, ...]] = 1.0, alpha: Union[float, tuple[float, ...]] = 2.0, interp=sitk.sitkLinear) -> sitk.Image:
+def elastic_deformation(image: ImageType, sigma: Union[float, tuple[float, ...]] = 1.0, alpha: Union[float, tuple[float, ...]] = 2.0, interp=sitk.sitkLinear, seed: Optional[Union[np.random.Generator, int]] = None) -> sitk.Image:
     """Perform a random elastic deformation on the image.
 
     Parameters
@@ -1165,16 +1167,90 @@ def elastic_deformation(image: ImageType, sigma: Union[float, tuple[float, ...]]
         The smoothness of the deformation - higher is smoother, by default 1.0
     alpha : Union[float, tuple[float, ...]], optional
         The magnitude of the deformation, by default 2.0
+    seed : Optional[Union[np.random.Generator, int]], optional
+        The seed or generator for random values, by default None
 
     NOTE
     ----
     sigma and alpha can either be single float values or tuples of values for each dimension
     """
-    deformation = np.random.rand(*image.GetSize(), image.GetDimension()) * 2 - 1
+    if isinstance(seed, np.random.Generator):
+        random = seed
+    else:
+        random = np.random.default_rng(seed)
+    deformation = random.random(size=(*image.GetSize()[::-1], image.GetDimension())) * 2 - 1
+    print(deformation.shape)
     def_image = sitk.GetImageFromArray(deformation, isVector=True)
+    def_image.CopyInformation(image)
     def_image = sitk.SmoothingRecursiveGaussian(def_image, sigma=sigma)
     def_image = multiply_vector_image(def_image, alpha)
 
     warp_filt = sitk.WarpImageFilter()
     warp_filt.SetInterpolator(interp)
+    warp_filt.SetOutputParameteresFromImage(image)
     return warp_filt.Execute(image, def_image)
+
+
+def quick_euler_3d(self,
+                   rotation: Union[Sequence[float], npt.NDArray[np.floating]] = (0., ),
+                   translation: Union[Sequence[int], npt.NDArray[np.integer]] = (0., ),
+                   center: Optional[Sequence[float]] = None,
+                   as_degrees: bool = False,) -> sitk.Euler3DTransform:
+    """Short-cut method for getting a sitk.Euler3DTransform object
+
+    Parameters
+    ----------
+    rotation : Union[Sequence[float], npt.NDArray[np.floating]], optional
+        The rotation to apply along each axis, by default (0., )
+    translation : Union[Sequence[int], npt.NDArray[np.integer]], optional
+        The translation to apply along each axis, by default (0., )
+    center : Optional[Sequence[float]], optional
+        The center of the rotations, if None uses the image center, by default None
+    as_degrees : bool, optional
+        If True, assumes rotation is given in degrees, by default False
+
+    Returns
+    -------
+    sitk.Euler3DTransform
+        The resulting transform
+
+    """
+    (rotation, translation), count = gouda.match_len(rotation, translation, 3)
+
+    rotation = np.array(rotation)
+    if as_degrees:
+        rotation = np.deg2rad(rotation)
+    translation = np.array(translation)
+
+    if center is None:
+        center = self.GetCenter()
+    if self.ndim == 3:
+        transform = sitk.Euler3DTransform()
+    else:
+        raise NotImplementedError('SmartImage.euler_transform has only been added for 3D so far')
+
+    transform.SetCenter(center)
+    transform.SetRotation(*rotation.tolist())
+    transform.SetTranslation(translation.tolist())
+    return transform
+
+
+def wrap_bounds(func, bg_val=0):
+    """Wraps a method so that it only operates on the non-zero bounds of an image and re-pads it afterwards."""
+    @functools.wraps(func)
+    def wrapped_func(image, *args, **kwargs):
+        image_type = get_image_type(image)
+        image = as_image(image)
+        bounds = get_bounds(image, bg_val=bg_val)[1]
+        bound_slice = [slice(item[0], item[1]) for item in bounds]
+        result = func(image[bound_slice].sitk_image, *args, **kwargs)
+        if not isinstance(result, (sitk.Image, SmartImage, np.ndarray)):
+            return result
+
+        low_padding = [int(item[0]) for item in bounds]
+        upper_padding = [int(side - item[1]) for side, item in zip(image.GetSize(), bounds)]
+        result = as_image(result)
+        result = result.apply(sitk.ConstantPad, low_padding, upper_padding, bg_val)
+        # result = sitk.ConstantPad(result, low_padding, upper_padding, bg_val)
+        return as_image_type(result, image_type)
+    return wrapped_func
