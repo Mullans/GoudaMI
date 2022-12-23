@@ -1179,7 +1179,6 @@ def elastic_deformation(image: ImageType, sigma: Union[float, tuple[float, ...]]
     else:
         random = np.random.default_rng(seed)
     deformation = random.random(size=(*image.GetSize()[::-1], image.GetDimension())) * 2 - 1
-    print(deformation.shape)
     def_image = sitk.GetImageFromArray(deformation, isVector=True)
     def_image.CopyInformation(image)
     def_image = sitk.SmoothingRecursiveGaussian(def_image, sigma=sigma)
