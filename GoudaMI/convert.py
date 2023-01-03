@@ -6,7 +6,7 @@ import sys
 import warnings
 from typing import Optional
 
-
+import gouda
 import numpy as np
 import SimpleITK as sitk
 
@@ -127,10 +127,27 @@ def wrap_numpy2numpy(func):
 def wrap_sitk(func):
     """Wrap a method that takes a SimpleITK.Image and returns anything so that it takes any image and returns the method return type"""
     @functools.wraps(func)
-    def wrapped_func(image, *args, **kwargs):
-        return_type = get_image_type(image)
-        result = func(as_image(image).sitk_image, *args, **kwargs)
-        return as_image_type(result, return_type)
+    def wrapped_func(*args, **kwargs):
+        new_args = []
+        return_type = None
+        for item in args:
+            if isinstance(item, (itk.Image, sitk.Image, SmartImage)):
+                if return_type is None:
+                    return_type = get_image_type(item)
+                new_args.append(as_image(item).sitk_image)
+            else:
+                new_args.append(item)
+        result = func(*new_args, **kwargs)
+        if gouda.is_iter(result, non_iter=(str, bytes, itk.Image, sitk.Image, SmartImage)):
+            new_results = []
+            for item in result:
+                if isinstance(item, (itk.Image, sitk.Image, SmartImage)):
+                    new_results.append(as_image_type(item, return_type))
+            return tuple(new_results)
+        elif isinstance(result, (itk.Image, sitk.Image, SmartImage)):
+            return as_image_type(result, return_type)
+        else:
+            return result
     return wrapped_func
 
 
