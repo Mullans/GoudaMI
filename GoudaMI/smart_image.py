@@ -500,6 +500,11 @@ class SmartImage(object):
         elif self.image_type == 'itk':
             return np.array(image.GetLargestPossibleRegion().GetSize())
 
+    @property
+    def shape(self):
+        """numpy-like equivalent of GetSize()"""
+        return self.GetSize()
+
     def GetPhysicalSize(self):
         return self.GetSize() * self.GetSpacing()
 
@@ -859,7 +864,7 @@ class SmartImage(object):
             rotation = gouda.force_len(rotation, self.ndim)
         if len(translation) == 1:
             translation = gouda.force_len(translation, self.ndim)
-        if len(rotation) != self.ndim or len(translation) != self.ndim:
+        if (len(rotation) != self.ndim and len(rotation) != self.ndim * self.ndim) or len(translation) != self.ndim:
             raise ValueError('Rotation and translation must be the same length as the image dimension')
 
         rotation = np.array(rotation)
@@ -877,8 +882,12 @@ class SmartImage(object):
             raise NotImplementedError('SmartImage.euler_transform has only been added for 3D so far')
 
         transform.SetCenter(center)
-        transform.SetRotation(*rotation.tolist())
-        transform.SetTranslation(translation.tolist())
+        if rotation.ndim == 2 or rotation.size == self.ndim * self.ndim:
+            # assumes rotation includes translation
+            transform.SetMatrix(rotation.reshape([-1, ]))
+        else:
+            transform.SetRotation(*rotation.tolist())
+            transform.SetTranslation(translation.tolist())
 
         if interp == 'auto':
             if self.min() >= 0 and self.max() < 255 and 'f' not in str(self.dtype):
@@ -886,7 +895,8 @@ class SmartImage(object):
                 interp = sitk.sitkNearestNeighbor
             else:
                 # This should be an image
-                interp = sitk.sitkBSpline
+                interp = sitk.sitkLinear
+                # interp = sitk.sitkBSpline
         resample_filter = sitk.ResampleImageFilter()
         resample_filter.SetReferenceImage(self.sitk_image)
         resample_filter.SetTransform(transform)
