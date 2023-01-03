@@ -942,7 +942,13 @@ class SmartImage(object):
             raise ValueError('self.image is type {}'.format(type(image)))
 
     def __mul__(self, other):
-        return self.__perform_op(sitk.Multiply, itk.MultiplyImageFilter, other, in_place=False)
+        try:
+            return self.__perform_op(sitk.Multiply, itk.MultiplyImageFilter, other, in_place=False)
+        except KeyError:
+            warnings.warn('Failed to import itk.MultiplyImageFilter due to issue in LazyLoading')
+            # There is some issue in how itk does LazyLoading
+            # Workaround - import itkConfig; itkConfig.LazyLoading = False (slow import - it loads everything)
+            return self.__perform_op(sitk.Multiply, None, other, in_place=False)
 
     # def __rmul__(self, other):
         # This would be [other * self] rather than [self * other] - do we want this?
