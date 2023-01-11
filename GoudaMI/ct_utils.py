@@ -1250,6 +1250,60 @@ def wrap_bounds(func, bg_val=0):
         upper_padding = [int(side - item[1]) for side, item in zip(image.GetSize(), bounds)]
         result = as_image(result)
         result = result.apply(sitk.ConstantPad, low_padding, upper_padding, bg_val)
-        # result = sitk.ConstantPad(result, low_padding, upper_padding, bg_val)
         return as_image_type(result, image_type)
     return wrapped_func
+
+
+@wrap_sitk
+def pad_to_same(*images: sitk.Image, bg_val: int = 0, share_info: bool = False) -> list[sitk.Image]:
+    """Pad all images to the same size.
+
+    Parameters
+    ----------
+    *images : sitk.Image
+        The images to pad
+    bg_val : int, optional
+        Background pad value, by default 0
+    share_info : bool, optional
+        Whether to copy information from the first image across all images, by default False
+
+    NOTE
+    ----
+    Only use share_info if you don't care about origin/spacing/direction of the images. Not all images get the same padding, so their origin will likely shift differently.
+    """
+    sizes = [np.array(image.GetSize()) for image in images]
+    largest = np.max(sizes, axis=0)
+    results = []
+    shared_ref = None
+    for image in images:
+        image_size = np.array(image.GetSize())
+        pad = largest - image_size
+        upper_pad = (pad // 2).astype(int)
+        lower_pad = (pad - upper_pad).astype(int)
+        if upper_pad.sum() + lower_pad.sum() > 0:
+            image = sitk.ConstantPad(image, lower_pad.tolist(), upper_pad.tolist(), constant=bg_val)
+        if share_info:
+            if shared_ref is None:
+                shared_ref = image
+            else:
+                image.CopyInformation(shared_ref)
+        results.append(image)
+    return results
+
+
+@wrap_sitk
+def pad_to_cube(img: sitk.Image, bg_val=0) -> sitk.Image:
+    """Constant pad image so all sides are the same length.
+
+    Parameters
+    ----------
+    img : sitk.Image
+        Image to pad
+    bg_val : int, optional
+        The value to pad with, by default 0
+    """
+    size = img.GetSize()
+    pad = [max(size) - s for s in size]
+    upper_pad = [p // 2 for p in pad]
+    lower_pad = [pad[i] - upper_pad[i] for i in range(len(pad))]
+    return sitk.ConstantPad(img, lower_pad, upper_pad, constant=bg_val)

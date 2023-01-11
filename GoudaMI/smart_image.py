@@ -505,6 +505,11 @@ class SmartImage(object):
         """numpy-like equivalent of GetSize()"""
         return self.GetSize()
 
+    @property
+    def size(self):
+        """Number of total voxels"""
+        return np.prod(self.GetSize())
+
     def GetPhysicalSize(self):
         return self.GetSize() * self.GetSpacing()
 
@@ -1097,7 +1102,10 @@ class SmartImage(object):
         if in_place:
             self.update(result)
             return self
-        return result
+        elif get_image_type(result) in ['sitk', 'itk', 'smartimage']:
+            return as_image(result)
+        else:
+            return result
 
 
 ImageType = Union[SmartImage, itk.Image, sitk.Image]
@@ -1112,9 +1120,13 @@ def as_image(image: ImageArrayType) -> SmartImage:
     else:
         return image
 
-
+#TODO - maybe move to convert?
 def as_image_type(image: ImageArrayType, output_type: str) -> ImageArrayType:
     """Convert an image to a specific type"""
+    image_type = get_image_type(image)
+    if output_type == image_type:
+        return image
+
     if output_type == 'sitk':
         return as_image(image).sitk_image
     elif output_type == 'itk':
@@ -1126,7 +1138,7 @@ def as_image_type(image: ImageArrayType, output_type: str) -> ImageArrayType:
     else:
         raise ValueError('Invalid image type: {}'.format(output_type))
 
-
+#TODO - Maybe move to ct_utils?
 def zeros_like(image: Union[itk.Image, sitk.Image, SmartImage, dict], dtype: Optional[str] = None):
     """Return an image of zeros with the same physical parameters as the input
 
