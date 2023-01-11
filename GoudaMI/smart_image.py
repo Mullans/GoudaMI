@@ -232,6 +232,9 @@ class SmartImage(object):
         elif self.image_type == 'sitk':
             return SmartType.as_string(image.GetPixelID())
 
+    def is_vector(self):
+        return 'vector' in self.dtype
+
     @property
     def image_type(self):
         if self.__image_type is None:
@@ -341,14 +344,23 @@ class SmartImage(object):
         else:
             raise ValueError("This should never reach here")
 
-    def astype(self, dtype, in_place=False, image_type=None, return_smart_image=True):
+    def astype(self, dtype, allow_vector=True, in_place=False, image_type=None, return_smart_image=True):
         image_type = self.default_type if image_type is None else image_type
         if image_type == 'sitk':
             image = self.sitk_image
-            sitk_type = SmartType.as_sitk(dtype)
+            if 'vector' in self.dtype and allow_vector:
+                sitk_type = SmartType.as_sitk(dtype, vector=True)
+            else:
+                sitk_type = SmartType.as_sitk(dtype)
             if sitk_type is None:
                 raise ValueError(f"Unknown dtype: {dtype}")
-            image = sitk.Cast(image, sitk_type)
+
+            if 'vector' in self.dtype and not allow_vector:
+                ncomp = image.GetNumberOfComponentsPerPixel()
+                result = [sitk.VectorIndexSelectionCast(image, idx, sitk_type) for idx in range(ncomp)]
+                image = sitk.JoinSeries(result)
+            else:
+                image = sitk.Cast(image, sitk_type)
             if in_place:
                 return self.update(image)
         elif image_type == 'itk':

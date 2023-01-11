@@ -1307,3 +1307,24 @@ def pad_to_cube(img: sitk.Image, bg_val=0) -> sitk.Image:
     upper_pad = [p // 2 for p in pad]
     lower_pad = [pad[i] - upper_pad[i] for i in range(len(pad))]
     return sitk.ConstantPad(img, lower_pad, upper_pad, constant=bg_val)
+
+
+def label2vec(image: ImageType, bg_val=0) -> SmartImage:
+    """Divide an image of integers into vector components based on value"""
+    if not isinstance(image, sitk.Image):
+        image = as_image(image).sitk_image
+    labels = np.unique(sitk.GetArrayViewFromImage(image))
+    result = sitk.Compose([image == label for label in labels if label != bg_val])
+    return as_image(result)
+
+
+def vec2label(vec: ImageType) -> SmartImage:
+    """Combine a vector of binary images into a label image"""
+    if not isinstance(vec, sitk.Image):
+        vec = as_image(vec).sitk_image
+    result = None
+    for idx in range(vec.GetNumberOfComponentsPerPixel()):
+        image = sitk.VectorIndexSelectionCast(vec, idx) * (idx + 1)
+        image = (image > 0.5) * (idx + 1)
+        result = image if result is None else sitk.Maximum(result, image)
+    return as_image(result).astype('uint8')
