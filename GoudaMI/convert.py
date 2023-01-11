@@ -125,7 +125,7 @@ def wrap_numpy2numpy(func):
 
 
 def wrap_sitk(func):
-    """Wrap a method that takes a SimpleITK.Image and returns anything so that it takes any image and returns the method return type"""
+    """Wrap a method that takes SimpleITK.Image(s) and returns anything so that it takes any image and returns the method return type"""
     @functools.wraps(func)
     def wrapped_func(*args, **kwargs):
         new_args = []
@@ -137,7 +137,13 @@ def wrap_sitk(func):
                 new_args.append(as_image(item).sitk_image)
             else:
                 new_args.append(item)
-        result = func(*new_args, **kwargs)
+        new_kwargs = {}
+        for key, item in kwargs.items():
+            if isinstance(item, (itk.Image, sitk.Image, SmartImage)):
+                new_kwargs[key] = as_image(item).sitk_image
+            else:
+                new_kwargs[key] = item
+        result = func(*new_args, **new_kwargs)
         if gouda.is_iter(result, non_iter=(str, bytes, itk.Image, sitk.Image, SmartImage)):
             new_results = []
             for item in result:
