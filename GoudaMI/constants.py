@@ -67,7 +67,7 @@ class SmartType():
         # https://www.intel.com/content/www/us/en/developer/articles/technical/size-of-long-integer-type-on-different-architecture-and-os.html
         uniform2itk[4] = itk.SI  # signed integer over signed long - SL often not wrapped
         uniform2itk[5] = itk.UI  # unsigned integer of unsigned long
-        #! Ignoring vector types for ITK for now... there's ~ 105 total types in ITK, and we only need 10 for numpy, so we'll just ignore the rest for now. Use itk.Image.GetTypes() to see them all.
+        # ! Ignoring vector types for ITK for now... there's ~ 105 total types in ITK, and we only need 10 for numpy, so we'll just ignore the rest for now. Use itk.Image.GetTypes() to see them all.
 
     sitk2uniform = {sitk.sitkInt8: 0, sitk.sitkUInt8: 1, sitk.sitkInt16: 2, sitk.sitkUInt16: 3, sitk.sitkInt32: 4, sitk.sitkUInt32: 5, sitk.sitkInt64: 6, sitk.sitkUInt64: 7, sitk.sitkFloat32: 8, sitk.sitkFloat64: 9, sitk.sitkComplexFloat32: -5, sitk.sitkComplexFloat64: 11, sitk.sitkVectorInt8: 12, sitk.sitkVectorUInt8: 13, sitk.sitkVectorInt16: 14, sitk.sitkVectorUInt16: 15, sitk.sitkVectorInt32: 16, sitk.sitkVectorUInt32: 17, sitk.sitkVectorInt64: 18, sitk.sitkVectorUInt64: 19, sitk.sitkVectorFloat32: 20, sitk.sitkVectorFloat64: 21, sitk.sitkLabelUInt8: 22, sitk.sitkLabelUInt16: 23, sitk.sitkLabelUInt32: 24, sitk.sitkLabelUInt64: 25}
 

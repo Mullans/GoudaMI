@@ -710,13 +710,15 @@ def resample_group(images, ref_idx=0, ref_image=None, outside_val=-1000, interp=
         The interpolator to use for resampling
     """
     # TODO - allow passing reference dict
-    ref = get_sampling_info(images[ref_idx])
+    if ref_image is None:
+        ref_image = images[ref_idx]
+    ref = get_sampling_info(ref_image)
     for idx in range(len(images)):
         if idx == ref_idx:
             continue
         if compare_physical(images[idx], ref):
             continue
-        images[idx] = resample_to_ref(images[idx], images[ref_idx], outside_val=outside_val, interp=interp)
+        images[idx] = resample_to_ref(images[idx], ref_image, outside_val=outside_val, interp=interp)
     return images
 
 
@@ -1255,7 +1257,7 @@ def wrap_bounds(func, bg_val=0):
 
 
 @wrap_sitk
-def pad_to_same(*images: sitk.Image, bg_val: int = 0, share_info: bool = False) -> list[sitk.Image]:
+def pad_to_same(*images: sitk.Image, bg_val: int = 0, upper_pad_only: bool = True, share_info: bool = False) -> list[sitk.Image]:
     """Pad all images to the same size.
 
     Parameters
@@ -1264,6 +1266,8 @@ def pad_to_same(*images: sitk.Image, bg_val: int = 0, share_info: bool = False) 
         The images to pad
     bg_val : int, optional
         Background pad value, by default 0
+    upper_pad_only : bool, optional
+        Whether to only pad away from the origin
     share_info : bool, optional
         Whether to copy information from the first image across all images, by default False
 
@@ -1309,13 +1313,29 @@ def pad_to_cube(img: sitk.Image, bg_val=0) -> sitk.Image:
     return sitk.ConstantPad(img, lower_pad, upper_pad, constant=bg_val)
 
 
-def label2vec(image: ImageType, bg_val=0) -> SmartImage:
-    """Divide an image of integers into vector components based on value"""
+def label2vec(image: ImageType, bg_val=0, dtype='vector float32') -> SmartImage:
+    """Divide an image of integers into vector components based on value
+
+    Parameters
+    ----------
+    image : ImageType
+        label image to convert into a vector
+    bg_val : int, optional
+        value of background pixels, by default 0
+    dtype : str, optional
+        Output type of the vector image, by default 'vector float32'
+
+
+    NOTE
+    ----
+    This is most useful for interpolating a label image with multiple label classes, but you will get best results by using floating type vectors.
+    """
     if not isinstance(image, sitk.Image):
         image = as_image(image).sitk_image
     labels = np.unique(sitk.GetArrayViewFromImage(image))
     result = sitk.Compose([image == label for label in labels if label != bg_val])
-    return as_image(result)
+    result = as_image(result).astype(dtype)
+    return result
 
 
 def vec2label(vec: ImageType) -> SmartImage:

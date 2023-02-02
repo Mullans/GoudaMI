@@ -640,12 +640,31 @@ class SmartImage(object):
         else:
             return SmartImage(result)
 
-    def write(self, dest_path, image_type=None, compression=0):
+    def write(self, dest_path: Union[str, os.PathLike], image_type: str = None, compression: Union[int, str] = 'auto'):
+        """Write the image to a file
+
+        Parameters
+        ----------
+        dest_path : Union[str, os.PathLike]
+            The destination path to write the image to
+        image_type : str, optional
+            The type of image to write (ie. sitk, itk, numpy), by default None (uses default type)
+        compression : Union[int, str], optional
+            The level of compression to use (only used with `sitk` image_type), by default 'auto'
+
+        NOTE
+        ----
+        compression is a hint to the SimpleITK writer and may be ignored if the image type does not support compression. See :class:`~SimpleITK.ImageFileWriter` for more details. 'auto' compression will use gzip compression for numpy files and -1 compression for sitk files.
+
+        # !TODO - add numpy compression w/ gzip
+        """
         image_type = self.default_type if image_type is None else image_type
         dest_path = str(dest_path)
         if image_type == 'sitk':
+            if isinstance(compression, str):
+                compression = -1 if dest_path.endswith('.gz') else 0
             image = self.sitk_image
-            if compression > 0:
+            if compression != 0:
                 sitk.WriteImage(image, dest_path, True, compression)
             else:
                 sitk.WriteImage(image, dest_path)
