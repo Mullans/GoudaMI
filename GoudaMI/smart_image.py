@@ -94,13 +94,14 @@ def itk2sitk(image):
 
 
 class SmartImage(object):
-    def __init__(self, path, default_type='sitk'):
+    def __init__(self, path, autocast=True, default_type='sitk'):
         self.__sitk_image: sitk.Image = None
         self.__itk_image: itk.Image = None
         self.__updated_itk: bool = False
         self.__updated_sitk: bool = False
         self.__image_type: str = None
         self.__meta_data: dict = None
+        self.allow_autocast = autocast
         if default_type not in ['sitk', 'itk']:
             raise ValueError('SmartImage default type must be `sitk` or `itk`.')
         self.default_type = default_type
@@ -219,6 +220,9 @@ class SmartImage(object):
         if self.__var_intensity is None:
             self.__run_image_stats()
         return self.__var_intensity
+
+    def percentile(self, q: npt.ArrayLike) -> npt.ArrayLike:
+        return np.percentile(self.as_view(), q)
 
     @property
     def dtype(self):
@@ -499,7 +503,7 @@ class SmartImage(object):
 
     def GetCenter(self):
         """Return the coordinates of the center of the image"""
-        return self.TransformIndexToPhysicalPoint((self.GetSize() / 2).tolist())
+        return self.TransformIndexToPhysicalPoint((self.GetSize() / 2))
 
     def GetSize(self):
         if not self.loaded:
@@ -949,6 +953,9 @@ class SmartImage(object):
     def __add__(self, other):
         return self.__perform_op(sitk.Add, itk.AddImageFilter, other, in_place=False, autocast=True)
 
+    def __radd__(self, other):
+        return self.__perform_op(sitk.Add, itk.AddImageFilter, other, self_first=False, in_place=False, autocast=True)
+
     def __iadd__(self, other):
         self.__perform_op(sitk.Add, itk.AddImageFilter, other, in_place=True)
         # self.update(result)  # TODO - check that inplace ops are working
@@ -996,6 +1003,15 @@ class SmartImage(object):
             # Workaround - import itkConfig; itkConfig.LazyLoading = False (slow import - it loads everything)
             return self.__perform_op(sitk.Multiply, None, other, in_place=False)
 
+    def __rmul__(self, other):
+        try:
+            return self.__perform_op(sitk.Multiply, itk.MultiplyImageFilter, other, self_first=False, in_place=False)
+        except KeyError:
+            warnings.warn('Failed to import itk.MultiplyImageFilter due to issue in LazyLoading')
+            # There is some issue in how itk does LazyLoading
+            # Workaround - import itkConfig; itkConfig.LazyLoading = False (slow import - it loads everything)
+            return self.__perform_op(sitk.Multiply, None, other, self_first=False, in_place=False)
+
     # def __rmul__(self, other):
         # This would be [other * self] rather than [self * other] - do we want this?
 
@@ -1015,6 +1031,9 @@ class SmartImage(object):
 
     def __sub__(self, other):
         return self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, in_place=False, autocast=True)
+
+    def __rsub__(self, other):
+        return self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, self_first=False, in_place=False, autocast=True)
 
     def __isub__(self, other):
         self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, in_place=True)
@@ -1037,7 +1056,7 @@ class SmartImage(object):
         # TODO - add itk version (may need a internal method to run a filter...)
         return self.__perform_op(sitk.ChangeLabel, None, changeMap=changeMap, in_place=in_place)
 
-    def __perform_op(self, sitk_op, itk_op, *args, in_place=False, autocast=False, **kwargs):
+    def __perform_op(self, sitk_op, itk_op, *args, self_first=True, in_place=False, autocast=None, **kwargs):
         """Perform the sitk/itk operation depending on the current image type
 
         Parameters
@@ -1046,16 +1065,19 @@ class SmartImage(object):
             The sitk operation - ex. sitk.Add, sitk.Subtract
         itk_op : function
             The itk operation - ex. itk.AddImageFilter, sitk.SubtractImageFilter
+        self_first : bool
+            Whether to use this image as the first argument to the op - if False, this image is the last given argument (used for __rsub__ and similar), by default True
         in_place : bool
             If true, update the current image, by default False
         autocast : Union[bool, str]
-            Can be true to detect output type based on :func:`numpy.result_type`, a string to manually set type, or False to not cast, by default False
+            Can be true to detect output type based on :func:`numpy.result_type`, a string to manually set type, or False to not cast, by default None - if None, uses the object's allow_autocast setting
 
         Note
         ----
         Any SmartImage or Image objects passed as args will be converted before being passed to the op.
 
         """
+        autocast = self.allow_autocast if autocast is None else autocast
         image = self.image
         output_type = self.dtype
         if self.image_type == 'sitk':
@@ -1073,7 +1095,10 @@ class SmartImage(object):
                     if get_image_type(new_args[idx]) == 'sitk':
                         new_args[idx] = sitk.Cast(new_args[idx], output_type)
                 image = sitk.Cast(image, output_type)
-            result = sitk_op(image, *new_args, **kwargs)
+            if self_first:
+                result = sitk_op(image, *new_args, **kwargs)
+            else:
+                result = sitk_op(*new_args, image, **kwargs)
         elif self.image_type == 'itk':
             if itk_op is None:
                 raise NotImplementedError("The ITK version of this operation has not been implemented for SmartImage yet")
@@ -1089,8 +1114,10 @@ class SmartImage(object):
                     if get_image_type(new_args[idx]) == 'itk':
                         new_args[idx] = itk.CastImageFilter[new_args[idx], output_type].New()(new_args[idx])
                 image = itk.CastImageFilter[image, output_type].New()(image)
-            result = itk_op(image, *new_args, **kwargs)
-
+            if self_first:
+                result = itk_op(image, *new_args, **kwargs)
+            else:
+                result = itk_op(*new_args, image, **kwargs)
         result_type = get_image_type(result)
         if result_type in ['sitk', 'itk', 'smartimage']:
             if in_place:
