@@ -603,13 +603,13 @@ class SmartImage(object):
         # TODO - add itk version, may need internal method to wrap filter
         return self.__perform_op(sitk.ConnectedComponent, None, fully_connected, in_place=in_place)
 
-    def unique(self):
+    def unique(self, bg_val='auto'):
         if self.__unique_labels is None:
             label_filt = sitk.LabelShapeStatisticsImageFilter()
             if self.__minimum_intensity is not None:
                 label_filt.SetBackgroundValue(self.__minimum_intensity - 1)
             else:
-                label_filt.SetBackgroundValue(-1)  # -1000 makes it lose labels sometimes?
+                label_filt.SetBackgroundValue(0)  # -1000 makes it lose labels sometimes?
             label_filt.SetComputePerimeter(False)
             label_filt.Execute(self.sitk_image)
             self.__unique_labels = label_filt.GetLabels()
@@ -711,6 +711,8 @@ class SmartImage(object):
             max = level + (width / 2)
         else:
             raise ValueError('Either min/max or level/width must be set for windowing')
+        if min == max:
+            raise ValueError('Cannot window with `min == max`')
         output_min = min if output_min is None else output_min
         output_max = max if output_max is None else output_max
         image = self.image
@@ -1132,6 +1134,9 @@ class SmartImage(object):
     def __setitem__(self, key, val):
         image = self.image
         if self.image_type == 'sitk' or self.image_type == 'itk':
+            val_type = get_image_type(val)
+            if val_type in ['sitk', 'itk', 'smartimage', 'numpy']:
+                val = as_image_type(val, self.image_type)
             image[key] = val
         else:
             # Should never throw this error
