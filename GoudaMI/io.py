@@ -31,7 +31,7 @@ def read_vtk(path, data_type='polydata'):
         reader = vtk.vtkPolyDataReader()
     else:
         raise ValueError("Unknown data type {}. Add it to the method if it's correct".format(data_type))
-    reader.SetInputString(path)
+    reader.SetFileName(path)
     reader.Update()
     return reader.GetOutput()
 
