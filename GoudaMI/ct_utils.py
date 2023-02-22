@@ -41,6 +41,7 @@ def clip_image(image: ImageType, low: float, high: float):
         raise TypeError('Unknown image type: {}'.format(type(image)))
 
 
+@wrap_sitk
 def quick_open(img, radius=3):
     """Shortcut method for applying the sitk BinaryMorphologicalOpeningImageFilter"""
     if isinstance(img, np.ndarray):
@@ -53,6 +54,7 @@ def quick_open(img, radius=3):
     return opener.Execute(img)
 
 
+@wrap_sitk
 def quick_close(img, radius=3):
     """Shortcut method for applying the sitk BinaryMorphologicalClosingImageFilter"""
     if isinstance(img, np.ndarray):
@@ -64,6 +66,7 @@ def quick_close(img, radius=3):
     return closer.Execute(img)
 
 
+@wrap_sitk
 def quick_dilate(img, radius=3):
     """Shortcut method for applying the sitk BinaryDilateImageFilter"""
     if isinstance(img, np.ndarray):
@@ -76,6 +79,7 @@ def quick_dilate(img, radius=3):
     return dil_filter.Execute(img)
 
 
+@wrap_sitk
 def quick_erode(img, radius=3):
     """Shortcut for applying the sitk BinaryErodeImageFilter"""
     if isinstance(img, np.ndarray):
@@ -660,6 +664,7 @@ def get_bounds(label: ImageType, bg_val: float = 0) -> List[Tuple[int, int]]:
 
 
 def get_shared_bounds(mask1, mask2):
+    # ! TODO - update for n-masks
     bounds1, bounds2 = get_bounds(mask1)[1], get_bounds(mask2)[1]
     shared_bounds = [[max(bounds1[i], bounds2[i]), min(bounds1[i], bounds2[i]), None] for i in range(len(bounds1))]
     return shared_bounds
@@ -1348,3 +1353,21 @@ def vec2label(vec: ImageType) -> SmartImage:
         image = (image > 0.5) * (idx + 1)
         result = image if result is None else sitk.Maximum(result, image)
     return as_image(result).astype('uint8')
+
+
+def total_variation(image: ImageType):
+    """Compute the anisotropic total variation of the image
+
+    Equation source: https://www.wikiwand.com/en/Total_variation_denoising
+    """
+    image = as_image(image).as_view()
+    tv = 0
+    for axis in range(image.ndim):
+        slicer_front = [slice(None)] * image.ndim
+        slicer_front[axis] = slice(1, None)
+        slicer_front = tuple(slicer_front)
+        slicer_back = [slice(None)] * image.ndim
+        slicer_back[axis] = slice(None, -1)
+        slicer_back = tuple(slicer_back)
+        tv += np.abs(image[slicer_front] - image[slicer_back]).sum()
+    return tv
