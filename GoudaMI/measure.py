@@ -85,11 +85,11 @@ def get_comparison_metrics(label_image, pred_image, overlap_metrics=True, distan
                 image_results[label][key] = overlap_results[key]
         if distance_metrics:
             if label not in pred_stats.GetLabels():
-                warnings.warn('Missing label in predicted image - defaulting distance to inf')
-                dist_results = {'ASSD': float('inf'),
-                                'SSSD': float('inf'),
-                                'HausdorffDistance': float('inf'),
-                                'HausdorffDistance95': float('inf')}
+                warnings.warn('Missing label in predicted image - defaulting distance to nan')
+                dist_results = {'ASSD': np.nan,
+                                'RSSD': np.nan,
+                                'HausdorffDistance': np.nan,
+                                'HausdorffDistance95': np.nan}
             else:
                 dist_results = get_binary_distance_metrics(
                     label_image, pred_image,
@@ -106,7 +106,7 @@ def get_comparison_metrics(label_image, pred_image, overlap_metrics=True, distan
     return image_results
 
 
-def get_binary_distance_metrics(label_image, pred_image, fully_connected=False, label=None, detailed=False):
+def get_binary_distance_metrics(label_image, pred_image, fully_connected=True, label=None, detailed=False):
     """Get distance-based metrics between the label and predicted label
 
     Parameters
@@ -174,12 +174,13 @@ def get_binary_distance_metrics(label_image, pred_image, fully_connected=False, 
 
     results = {
         'ASSD': mean_abs_pred_dist,  # AKA - mean absolute prediction distance
-        'SSSD': mean_rel_pred_dist,  # AKA - mean relative prediction distance
+        'RSSD': mean_rel_pred_dist,  # AKA - mean relative prediction distance
         'HausdorffDistance': haus_dist,
         'HausdorffDistance95': haus_95,
     }
     if detailed:
         if all_dist_arr is None:
+            warnings.warn('No surface voxels found - defaulting distance to nan')
             results['MeanSurfaceToSurfaceDistance'] = np.nan
             results['MedianSurfaceToSurfaceDistance']: np.nan
             results['MaxSurfaceToSurfaceDistance'] = np.nan
@@ -359,8 +360,8 @@ def normalized_surface_dice(label1: sitk.Image, label2: sitk.Image, tol: float =
     from ._measure_deepmind import (
         ENCODE_NEIGHBOURHOOD_3D_KERNEL,
         create_table_neighbour_code_to_surface_area)
-    label1 = SmartImage(label1).sitk_image
-    label2 = SmartImage(label2).sitk_image
+    label1 = as_image(label1).sitk_image
+    label2 = as_image(label2).sitk_image
 
     # crop to a shared bounding box to reduce computation
     bounds = get_shared_bounds(label1, label2, as_slice=True, padding=5)

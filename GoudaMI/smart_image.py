@@ -1163,15 +1163,27 @@ class SmartImage(object):
             # Should never throw this error
             raise ValueError('Unknown image type: {}'.format(type(image)))
 
-    def apply(self, op, *args, in_place=True, **kwargs):
+    def apply(self, op, *args, image_type=None, in_place=True, **kwargs):
         """Apply an operation to the image
 
         Parameters
         ----------
-        method : function
-            The operation to apply to the image - should be the same type as the default image
+        op : function
+            The operation to apply to the image
+        image_type : str, optional
+            The type of the image to use, by default None - if None, uses the default image type
+        in_place : bool, optional
+            Whether to update the current image, by default True
         """
-        result = op(self.image, *args, **kwargs)
+        if image_type is None:
+            image = self.image
+        elif image_type == 'sitk':
+            image = self.sitk_image
+        elif image_type == 'itk':
+            image = self.itk_image
+        else:
+            raise ValueError('Unknown image type: {}'.format(image_type))
+        result = op(image, *args, **kwargs)
         if in_place:
             self.update(result)
             return self

@@ -691,15 +691,19 @@ def get_shared_bounds(*masks, target_label: int = 1, extent='max', as_slice: boo
         mask_bounds = get_bounds(mask)[target_label]
         if bounds is None:
             bounds = mask_bounds
+            extent = gouda.force_len(extent, len(bounds))
         else:
-            if extent == 'max':
-                bounds = [[min(bounds[idx][0], mask_bounds[idx][0]), max(bounds[idx][1], mask_bounds[idx][1])] for idx in range(len(bounds))]
-            elif extent == 'min':
-                bounds = [[max(bounds[idx][0], mask_bounds[idx][0]), min(bounds[idx][1], mask_bounds[idx][1])] for idx in range(len(bounds))]
+            for idx in range(len(bounds)):
+                if extent[idx] == 'max':
+                    bounds[idx] = [min(bounds[idx][0], mask_bounds[idx][0]),
+                                   max(bounds[idx][1], mask_bounds[idx][1])]
+                elif extent[idx] == 'min':
+                    bounds[idx] = [max(bounds[idx][0], mask_bounds[idx][0]),
+                                   min(bounds[idx][1], mask_bounds[idx][1])]
     padding = gouda.force_len(padding, len(bounds))
     for idx in range(len(bounds)):
         axis_pad = gouda.force_len(padding[idx], 2)
-        bounds[idx][0] -= axis_pad[0]
+        bounds[idx][0] = max(bounds[idx][0] - axis_pad[0], 0)
         bounds[idx][1] += axis_pad[1]
     if as_slice:
         bounds = tuple([slice(*item) for item in bounds])
