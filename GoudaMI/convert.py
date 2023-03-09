@@ -322,3 +322,64 @@ def plastimatch_rt_to_nifti(rt_path: os.PathLike, dicom_path: os.PathLike, dst_p
                 warnings.warn('Dicom image conversion finished with issues - see stdeerr\n' + '-' * 57)
                 print(result_string2, file=sys.stderr)
     return result_string
+
+
+def polydata_to_point_mask(polydata, ref_image):
+    """Convert a vtkPolyData object to a binary mask where each point is a 1
+
+    Parameters
+    ----------
+    polydata : vtk.vtkPolyData
+        The PolyData object to convert
+    ref_image : ImageType
+        Any reference object to use for size and spacing
+
+    Returns
+    -------
+    SmartImage
+        The resulting binary mask
+    """
+    src_points = vtk.util.numpy_support.vtk_to_numpy(polydata.GetPoints().GetData())
+    empty_arr = np.zeros(ref_image.GetSize()[::-1])
+    phys_points = np.round(src_points / ref_image.GetSpacing()).astype(int)
+    for item in phys_points:
+        empty_arr[item[2], item[1], item[0]] = 1
+    check_img = SmartImage(empty_arr)
+    check_img.CopyInformation(ref_image)
+    return check_img
+
+
+def polydata_to_label_mask(polydata, ref_image):
+    """Convert a vtkPolyData object to a binary mask where the PolyData is converted to a closed surface object
+
+    Parameters
+    ----------
+    polydata : vtk.vtkPolyData
+        The PolyData object to convert
+    ref_image : ImageType
+        Any reference object to use for size and spacing
+
+    Returns
+    -------
+    SmartImage
+        The resulting binary mask
+    """
+    ref_image = as_image(ref_image)
+    vtk_image = itk.vtk_image_from_image(ref_image.itk_image)
+    stencil = vtk.vtkPolyDataToImageStencil()
+    stencil.SetInputData(polydata)
+    stencil.SetOutputSpacing(ref_image.GetSpacing())
+    stencil.SetOutputWholeExtent(vtk_image.GetExtent())
+    stencil.Update()
+
+    converter = vtk.vtkImageStencilToImage()
+    converter.SetInputData(stencil.GetOutput())
+    converter.SetInsideValue(1)
+    converter.SetOutsideValue(0)
+    converter.SetOutputScalarTypeToUnsignedChar()
+    converter.Update()
+
+    result = itk.image_from_vtk_image(converter.GetOutput())
+    result = as_image(result)
+    result.CopyInformation(ref_image)
+    return result
