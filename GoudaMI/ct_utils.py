@@ -650,7 +650,7 @@ def get_bounds(label: ImageType, bg_val: float = 0) -> List[Tuple[int, int]]:
         pass
     else:
         label = as_image(label).sitk_image
-    if label.GetPixelID() != sitk.sitkUInt8:
+    if 'integer' not in label.GetPixelIDTypeAsString():
         label = sitk.Cast(label != bg_val, sitk.sitkUInt8)
     ndim = label.GetDimension()
     filt = sitk.LabelShapeStatisticsImageFilter()
@@ -663,11 +663,47 @@ def get_bounds(label: ImageType, bg_val: float = 0) -> List[Tuple[int, int]]:
     return bounds
 
 
-def get_shared_bounds(mask1, mask2):
-    # ! TODO - update for n-masks
-    bounds1, bounds2 = get_bounds(mask1)[1], get_bounds(mask2)[1]
-    shared_bounds = [[max(bounds1[i], bounds2[i]), min(bounds1[i], bounds2[i]), None] for i in range(len(bounds1))]
-    return shared_bounds
+def get_shared_bounds(*masks, target_label: int = 1, extent='max', as_slice: bool = False, padding: Union[int, Sequence[int], Sequence[tuple[int, int]]] = 0):
+    """Return the minimum bounds that encompass all target masks
+
+    Parameters
+    ----------
+    target_label : int, optional
+        Target label index to find the bounds of, by default 1
+    extent : str, optional
+        Whether to return the shared bounds encompassing the label union ("max") or intersection ("min"), by default 'max'
+    as_slice : bool, optional
+        Whether to return the bounds as a slice, by default False
+    padding : Union[int, Sequence[int], Sequence[tuple[int, int]]], optional
+        The number of pixels to pad the bounding box by along each axis, by default 0
+
+    Note
+    ----
+    padding can be a single int, an int for each axis, or a lower and upper padding for each axis
+
+    Returns
+    -------
+    list | tuple
+        either a list of [start, stop] for each axis or a tuple of slices
+    """
+    bounds = None
+    for mask in masks:
+        mask_bounds = get_bounds(mask)[target_label]
+        if bounds is None:
+            bounds = mask_bounds
+        else:
+            if extent == 'max':
+                bounds = [[min(bounds[idx][0], mask_bounds[idx][0]), max(bounds[idx][1], mask_bounds[idx][1])] for idx in range(len(bounds))]
+            elif extent == 'min':
+                bounds = [[max(bounds[idx][0], mask_bounds[idx][0]), min(bounds[idx][1], mask_bounds[idx][1])] for idx in range(len(bounds))]
+    padding = gouda.force_len(padding, len(bounds))
+    for idx in range(len(bounds)):
+        axis_pad = gouda.force_len(padding[idx], 2)
+        bounds[idx][0] -= axis_pad[0]
+        bounds[idx][1] += axis_pad[1]
+    if as_slice:
+        bounds = tuple([slice(*item) for item in bounds])
+    return bounds
 
 
 def split_itk_image_channels(image):
@@ -1371,3 +1407,79 @@ def total_variation(image: ImageType):
         slicer_back = tuple(slicer_back)
         tv += np.abs(image[slicer_front] - image[slicer_back]).sum()
     return tv
+
+
+def merge_close_objects(label: ImageType, tol: int = 3):
+    """Merge objects that are within each other's bounding boxes
+
+    Parameters
+    ----------
+    label : ImageType
+        The label image to merge - separate objects should have separate values
+    tol : int, optional
+        The number of voxels to expand the bounding box by in each direction when finding overlap, by default 3
+
+    Returns
+    -------
+    ImageType
+        The merged label image
+    """
+    bounds = get_bounds(label)
+    changed = False
+    result_map = {idx: idx for idx in bounds.keys()}
+    to_check = sorted(list(bounds.keys()))
+    for key in to_check:
+        key_bounds = tuple([slice(b[0] - tol, b[1] + tol) for b in bounds[key]])
+        merge_keys = label[key_bounds].unique()
+        if len(merge_keys) > 1:
+            changed = True
+            min_key = min([result_map[subkey] for subkey in merge_keys])
+            for subkey in merge_keys:
+                result_map[subkey] = min_key
+        unique_vals = set([result_map[subkey] for subkey in result_map.keys()])
+        if len(unique_vals) == 1:
+            break
+    if changed:
+        return label.change_label(result_map)
+    else:
+        return label
+
+
+def get_overlapping_objects(label: ImageType, pred: ImageType, tol: int = 3, run_connected_components: bool = False):
+    """Find overlapping object between two label images based on bounding boxes
+
+    Parameters
+    ----------
+    label : ImageType
+        The base image to find overlaps from
+    pred : ImageType
+        The image to find overlaps in
+    tol : int, optional
+        The number of pixels to expand the bounding box by in each direction when finding overlap, by default 3
+    run_connected_components : bool, optional
+        Whether to run connected components on the two label images before comparing, by default False
+
+    Note
+    ----
+    If run_connected_components is False, it assumes that all objects have a unique value within their respective images.
+
+    Returns
+    -------
+    dict
+        The keys are the label values in the label image, and the values are the label values in the pred image that overlap with the key
+    """
+    label = as_image(label)
+    pred = as_image(pred)
+    if run_connected_components:
+        label = label.cc
+        pred = pred.cc
+    label = merge_close_objects(label, tol=tol)
+    pred = merge_close_objects(pred, tol=tol)
+
+    label_bounds = get_bounds(label)
+    overlaps = {}
+    for key in label.unique():
+        key_bounds = tuple([slice(b[0] - tol, b[1] + tol) for b in label_bounds[key]])
+        overlap_keys = pred[key_bounds].unique()
+        overlaps[key] = overlap_keys
+    return overlaps
