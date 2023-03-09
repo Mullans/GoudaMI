@@ -1,9 +1,11 @@
 from typing import Tuple, Union
+import warnings
 
+import gouda
 import numpy as np
 import SimpleITK as sitk
 
-from GoudaMI.ct_utils import get_unique_labels
+from GoudaMI.ct_utils import get_unique_labels, get_shared_bounds
 from GoudaMI.smart_image import SmartImage, ImageType, as_image, get_image_type
 
 
@@ -50,36 +52,57 @@ def get_centroid_metrics(label_image, pred_image, return_centroids=False, return
     return to_return
 
 
-def get_comparison_metrics(label_image, pred_image, overlap_metrics=True, distance_metrics=True, fully_connected=True, labels=None):
+def get_comparison_metrics(label_image, pred_image, overlap_metrics=True, distance_metrics=True, fully_connected=True, surface_dice=True, nsd_tol=2, labels=None):
     if get_image_type(label_image) != 'sitk':
         label_image = as_image(label_image).sitk_image
     if get_image_type(pred_image) != 'sitk':
         pred_image = as_image(pred_image).sitk_image
+
+    pred_stats = sitk.LabelShapeStatisticsImageFilter()
+    pred_stats.Execute(pred_image)
+    label_stats = sitk.LabelShapeStatisticsImageFilter()
+    label_stats.Execute(label_image)
+
     if labels is None:
-        label_filt = sitk.LabelShapeStatisticsImageFilter()
-        label_filt.Execute(label_image)
-        labels = label_filt.GetLabels()
+        labels = label_stats.GetLabels()
+
+    nsd_tol = gouda.force_len(nsd_tol, len(labels))
 
     image_results = {}
     if overlap_metrics:
         overlap_filter = sitk.LabelOverlapMeasuresImageFilter()
         overlap_filter.Execute(pred_image, label_image)
-    for label_idx in labels:
-        image_results[label_idx] = {}
+    for label_idx, label in enumerate(labels):
+        image_results[label] = {}
         if overlap_metrics:
             overlap_results = {
-                'Dice': float(overlap_filter.GetDiceCoefficient(int(label_idx))),
-                'Jaccard': float(overlap_filter.GetJaccardCoefficient(int(label_idx))),
-                'FalsePositive': float(overlap_filter.GetFalsePositiveError(int(label_idx))),
-                'FalseNegative': float(overlap_filter.GetFalseNegativeError(int(label_idx)))
+                'Dice': float(overlap_filter.GetDiceCoefficient(int(label))),
+                'Jaccard': float(overlap_filter.GetJaccardCoefficient(int(label))),
+                'FalsePositive': float(overlap_filter.GetFalsePositiveError(int(label))),
+                'FalseNegative': float(overlap_filter.GetFalseNegativeError(int(label)))
             }
             for key in overlap_results:
-                image_results[label_idx][key] = overlap_results[key]
+                image_results[label][key] = overlap_results[key]
         if distance_metrics:
-            dist_results = get_binary_distance_metrics(
-                label_image, pred_image, label=int(label_idx), fully_connected=fully_connected)
+            if label not in pred_stats.GetLabels():
+                warnings.warn('Missing label in predicted image - defaulting distance to inf')
+                dist_results = {'ASSD': float('inf'),
+                                'SSSD': float('inf'),
+                                'HausdorffDistance': float('inf'),
+                                'HausdorffDistance95': float('inf')}
+            else:
+                dist_results = get_binary_distance_metrics(
+                    label_image, pred_image,
+                    label=int(label), fully_connected=fully_connected)
             for key in dist_results:
-                image_results[label_idx][key] = float(dist_results[key])
+                image_results[label][key] = float(dist_results[key])
+        if surface_dice:
+            if label not in pred_stats.GetLabels():
+                warnings.warn('Missing label in predicted image - defaulting surface dice to 0')
+                nsd = 0
+            else:
+                nsd = normalized_surface_dice(label_image == label, pred_image == label, tol=nsd_tol[label_idx])
+            image_results[label]['NSD'] = float(nsd)
     return image_results
 
 
@@ -105,6 +128,11 @@ def get_binary_distance_metrics(label_image, pred_image, fully_connected=False, 
     if label is not None:
         label_image = sitk.Equal(label_image, int(label))
         pred_image = sitk.Equal(pred_image, int(label))
+
+    # Crop to the shared bounds to speed up computation
+    shared_bounds = get_shared_bounds(label_image, pred_image, as_slice=True, padding=3)
+    label_image = label_image[shared_bounds]
+    pred_image = pred_image[shared_bounds]
 
     # Add a zero padding - it messes up the contours if the label is on an edge
     label_image = sitk.ConstantPad(label_image, [1, 1, 1], [1, 1, 1], 0)
@@ -292,7 +320,7 @@ def normalized_surface_dice(label1: sitk.Image, label2: sitk.Image, tol: float =
     label2 : sitk.Image
         Second binary label image
     tol : float
-        The tolerated difference between boundaries, by default 2
+        The tolerated difference between boundaries in physical units, by default 2
     kwargs : dict
         Optional keyword arguments to pass to :func:`GoudaMI.measure.get_distances`
 
@@ -315,12 +343,29 @@ def normalized_surface_dice(label1: sitk.Image, label2: sitk.Image, tol: float =
         * Pancreas - 5mm
         * Spleen - 3mm
         * Stomach - 5mm
+
+    More recommended tolerance (Medical Segmenation Decathlon):
+        * Brain (edema, enhancing & non-enhancing tumor) - multimodal MRI - 5mm
+        * Heart (left atrium) - MRI - 4mm
+        * Hippocampus (anterior and posterior) - MRI - 1mm
+        * Liver - portal venous phase CT - 7mm
+        * Lung Nodule - CT - 2mm
+        * Prostate (prosate peripheral zone and transition zone) - T2 MRI - 4mm
+        * Pancreas (pancreatic parenchyma and cyst/tumor) - porrtal venous phase CT - 5mm
+        * Colon (colon cancer primaries) - CT - 4mm
+        * Hepatic vessel (vessel and tumor) - CT - 3mm
+        * Spleen - CT - 3mm
     """
     from ._measure_deepmind import (
         ENCODE_NEIGHBOURHOOD_3D_KERNEL,
         create_table_neighbour_code_to_surface_area)
     label1 = SmartImage(label1).sitk_image
     label2 = SmartImage(label2).sitk_image
+
+    # crop to a shared bounding box to reduce computation
+    bounds = get_shared_bounds(label1, label2, as_slice=True, padding=5)
+    label1 = label1[bounds]
+    label2 = label2[bounds]
 
     spacing = np.asarray(label1.GetSpacing())
     spacing = spacing[::-1]

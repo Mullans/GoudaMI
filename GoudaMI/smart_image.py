@@ -151,7 +151,7 @@ class SmartImage(object):
 
     def __reset_internals(self, spatial_only=False):
         if spatial_only:
-            # NOTE - only reset values where direction/origin matters. None currently
+            # NOTE - only reset values where direction/origin/spacing matters. None currently
             return
         self.__minimum_intensity = None
         self.__maximum_intensity = None
@@ -536,6 +536,16 @@ class SmartImage(object):
                 return spacing
         return np.array(self.image.GetSpacing())
 
+    def SetSpacing(self, spacing):
+        self.image  # load the image if necessary
+        if self.image_type == 'sitk':
+            self.__sitk_image.SetSpacing(spacing)
+            self.__updated_sitk = True
+        elif self.image_type == 'itk':
+            self.__itk_image.SetSpacing(spacing)
+            self.__updated_itk = True
+        self.__reset_internals(spatial_only=True)
+
     def CopyInformation(self, ref_image):
         image = self.image
         if isinstance(ref_image, sitk.Image) and isinstance(image, sitk.Image):
@@ -791,7 +801,7 @@ class SmartImage(object):
         if presmooth is None:
             presmooth = np.all(self.GetSize() > size)
         presmooth = float(presmooth)
-        size = np.array(size).tolist()
+        size = np.array(size).astype(int).tolist()
         spacing = np.array(spacing).tolist()
         resample_filter = sitk.ResampleImageFilter()
         resample_filter.SetInterpolator(interp)
