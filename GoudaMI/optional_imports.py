@@ -10,7 +10,7 @@ class DummyModule:
         self.AndImageFilter = None
         self.OrImageFilter = None
         self.AddImageFilter = None
-        warnings.filterwarnings('always', '*may prevent some methods*')
+        warnings.filterwarnings('always', '.*(may prevent some methods).*')
         warnings.warn(f'ImportWarning: {self.__module_name} cannot be imported. This may prevent some methods from working as intended', RuntimeWarning, stacklevel=2)
 
     def imread(self, *args, **kwargs):
@@ -24,8 +24,12 @@ try:
     import itk
 except ImportError:
     itk = DummyModule('itk')
+except ModuleNotFoundError:
+    itk = DummyModule('itk')
 
 try:
     import vtk
 except ImportError:
+    vtk = DummyModule('vtk')
+except ModuleNotFoundError:
     vtk = DummyModule('vtk')
