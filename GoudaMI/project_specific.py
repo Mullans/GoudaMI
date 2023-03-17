@@ -3,12 +3,13 @@ import os
 import warnings
 from typing import Any
 
+import gouda
 import numpy as np
 import SimpleITK as sitk
 
 from GoudaMI.constants import MIN_INTENSITY_PULMONARY_CT
 from GoudaMI.convert import as_array
-from GoudaMI.ct_utils import resample_to_ref, resample_rescale
+from GoudaMI.ct_utils import resample_to_ref, resample_rescale, remove_small_items
 from GoudaMI.smart_image import SmartImage, as_image, get_image_type
 
 
@@ -434,3 +435,40 @@ def fill_slices(arr, dilate=0, erode=0, axis=0):
         output = sitk.GetImageFromArray(output)
         output.CopyInformation(src_img)
     return output
+
+
+def neighbor_vote(label, num_neighbors, neighborhood=3, remove_isolated=False):
+    """Return mapping of pixels with num_neighbors positive neighbors
+
+    Parameters
+    ----------
+    label : ImageType
+        Label to evaluate
+    num_neighbors : Union[int, float]
+        Either the count or ratio of positive neighbors required to be positive
+    neighborhood : int, optional
+        Size of the neighborhood to evaluate, by default 3
+    remove_isolated : bool
+        Whether to remove positive label pixels without enough neighbors
+    """
+    label = as_image(label) > 0
+    neighborhood = gouda.force_len(neighborhood, label.ndim)
+    mean_kernel = sitk.GetImageFromArray(np.ones(neighborhood))
+    mean_kernel = sitk.Cast(mean_kernel, label.sitk_image.GetPixelID())
+    votes = label.apply(sitk.Convolution, mean_kernel, in_place=False)
+    if num_neighbors >= 1:
+        num_neighbors = float(num_neighbors) / np.prod(neighborhood)
+    result = votes > num_neighbors
+    if remove_isolated:
+        return result
+    else:
+        return result.apply(sitk.Maximum, label.sitk_image)
+
+
+def find_centerline(label):
+    label = as_image(label).sitk_image
+    label = sitk.SignedMaurerDistanceMap(label, useImageSpacing=True, squaredDistance=True)
+    label = sitk.HConcave(label, 2)
+    label = neighbor_vote(label, 3)
+    label = remove_small_items(label, min_size=50)
+    return label

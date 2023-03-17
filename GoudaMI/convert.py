@@ -42,7 +42,7 @@ def as_view(image: ImageType) -> np.ndarray:
     return image
 
 
-def wrap4itk(func):
+def wrap4vtk(func):
     """Wrap a method that takes a vtk.ImageData and returns a vtk.PolyData"""
     @functools.wraps(func)
     def wrapped_func(image, *args, **kwargs):

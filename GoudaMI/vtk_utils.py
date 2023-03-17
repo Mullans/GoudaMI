@@ -1,4 +1,4 @@
-from GoudaMI.convert import wrap4itk
+from GoudaMI.convert import wrap4vtk
 from GoudaMI.optional_imports import vtk
 
 
@@ -25,7 +25,7 @@ def get_sampling_info(item):
     return info
 
 
-@wrap4itk
+@wrap4vtk
 def get_smoothed_contour(contour, num_iterations=20, pass_band=0.01):
     """Apply the vtkWindowedSincPolyData Filter to a vtkImageData
 

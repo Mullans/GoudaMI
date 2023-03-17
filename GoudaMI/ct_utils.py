@@ -345,12 +345,14 @@ def get_sampling_info(image):
     return result
 
 
-def compare_physical(image1, image2):
+def compare_physical(image1, image2, check_dtype=False):
     info1 = image1 if isinstance(image1, dict) else get_sampling_info(image1)
     info2 = image2 if isinstance(image2, dict) else get_sampling_info(image2)
     if info1.keys() != info2.keys():
         raise ValueError('Mismatched keys between images')
     for key in info1.keys():
+        if not check_dtype and key == 'dtype':
+            continue
         if isinstance(info1[key], np.ndarray):
             key_check = np.allclose(info1[key], info2[key])
         elif gouda.is_iter(info1[key]):
@@ -843,6 +845,23 @@ def get_total_hull(arr):
     contours, hierarchy = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     full_hull = cv2.convexHull(np.concatenate(contours, axis=0), False)
     cv2.drawContours(result, [full_hull], -1, 1, -1)
+    return result
+
+
+def get_ndim_hull(image):
+    """Approximate the n-dimensional convex hull of the image label
+    """
+    image = as_image(image)
+    image_arr = image.as_view()
+    result = np.zeros(image_arr.shape, dtype=np.uint8)
+    for dim in range(image_arr.ndim):
+        slicer = [slice(None) for _ in range(image_arr.ndim)]
+        for idx in range(image_arr.shape[dim]):
+            slicer[dim] = idx
+            hull = get_total_hull(image_arr[tuple(slicer)])
+            result[tuple(slicer)] += hull
+    result = as_image(result > 0)
+    result.CopyInformation(image)
     return result
 
 
