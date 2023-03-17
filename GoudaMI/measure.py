@@ -320,7 +320,7 @@ def normalized_surface_dice(label1: sitk.Image, label2: sitk.Image, tol: float =
         First binary label image
     label2 : sitk.Image
         Second binary label image
-    tol : float
+    tol : float | list
         The tolerated difference between boundaries in physical units, by default 2
     kwargs : dict
         Optional keyword arguments to pass to :func:`GoudaMI.measure.get_distances`
@@ -398,11 +398,23 @@ def normalized_surface_dice(label1: sitk.Image, label2: sitk.Image, tol: float =
 
     dist_gt2pred = pred_dist[gt_bord]
     dist_pred2gt = gt_dist[pred_bord]
-    gt_overlap = np.sum(gt_surfel_area[dist_gt2pred <= tol])
-    pred_overlap = np.sum(pred_surfel_area[dist_pred2gt <= tol])
-    gt_surf_area = np.sum(gt_surfel_area)
-    pred_surf_area = np.sum(pred_surfel_area)
-    return (gt_overlap + pred_overlap) / (gt_surf_area + pred_surf_area)
+
+    if not gouda.is_iter(tol):
+        gt_overlap = np.sum(gt_surfel_area[dist_gt2pred <= tol])
+        pred_overlap = np.sum(pred_surfel_area[dist_pred2gt <= tol])
+        gt_surf_area = np.sum(gt_surfel_area)
+        pred_surf_area = np.sum(pred_surfel_area)
+        return (gt_overlap + pred_overlap) / (gt_surf_area + pred_surf_area)
+    else:
+        results = []
+        for tol_item in tol:
+            gt_overlap = np.sum(gt_surfel_area[dist_gt2pred <= tol_item])
+            pred_overlap = np.sum(pred_surfel_area[dist_pred2gt <= tol_item])
+            gt_surf_area = np.sum(gt_surfel_area)
+            pred_surf_area = np.sum(pred_surfel_area)
+            results.append((gt_overlap + pred_overlap) / (gt_surf_area + pred_surf_area))
+        return results
+
 
 
 def get_distances(label1: sitk.Image, label2: sitk.Image, direction: str = 'both', use_squared_distance: bool = False, use_image_spacing: bool = True, fully_connected_contours: bool = False):
