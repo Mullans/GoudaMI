@@ -777,6 +777,7 @@ class SmartImage(object):
             If true, modifies the current image. Otherwise, returns the resampled copy.
         """
         image = self.sitk_image
+
         origin = self.GetOrigin() if origin is None else origin
         direction = self.GetDirection() if direction is None else direction
 
@@ -798,8 +799,10 @@ class SmartImage(object):
         if dryrun:
             return {'size': size, 'origin': origin, 'spacing': spacing, 'direction': direction}
 
-        if presmooth is None:
+        if presmooth is None and interp != sitk.sitkNearestNeighbor:
             presmooth = np.all(self.GetSize() > size)
+        elif presmooth is None:
+            presmooth = 0
         presmooth = float(presmooth)
         size = np.array(size).astype(int).tolist()
         spacing = np.array(spacing).tolist()
@@ -810,8 +813,10 @@ class SmartImage(object):
         resample_filter.SetOutputOrigin(origin)
         resample_filter.SetOutputSpacing(spacing)
         resample_filter.SetOutputDirection(direction)
+
         if presmooth > 0:
             image = sitk.RecursiveGaussian(image, presmooth)
+
         result = resample_filter.Execute(image)
         if in_place:
             self.update(result)
@@ -1175,6 +1180,7 @@ class SmartImage(object):
         in_place : bool, optional
             Whether to update the current image, by default True
         """
+        self.image  # force load
         if image_type is None:
             image = self.image
         elif image_type == 'sitk':
