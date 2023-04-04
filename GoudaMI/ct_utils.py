@@ -42,12 +42,12 @@ def clip_image(image: ImageType, low: float, high: float):
 
 
 @wrap_sitk
-def quick_open(img, radius=3):
+def quick_open(img, radius=3, kernel=sitk.sitkBall):
     """Shortcut method for applying the sitk BinaryMorphologicalOpeningImageFilter"""
     if isinstance(img, np.ndarray):
         img = sitk.GetImageFromArray(img)
     opener = sitk.BinaryMorphologicalOpeningImageFilter()
-    opener.SetKernelType(sitk.sitkBall)
+    opener.SetKernelType(kernel)
     opener.SetKernelRadius(radius)
     opener.SetForegroundValue(1)
     opener.SetBackgroundValue(0)
@@ -55,24 +55,24 @@ def quick_open(img, radius=3):
 
 
 @wrap_sitk
-def quick_close(img, radius=3):
+def quick_close(img, radius=3, kernel=sitk.sitkBall):
     """Shortcut method for applying the sitk BinaryMorphologicalClosingImageFilter"""
     if isinstance(img, np.ndarray):
         img = sitk.GetImageFromArray(img)
     closer = sitk.BinaryMorphologicalClosingImageFilter()
-    closer.SetKernelType(sitk.sitkBall)
+    closer.SetKernelType(kernel)
     closer.SetKernelRadius(radius)
     closer.SetForegroundValue(1)
     return closer.Execute(img)
 
 
 @wrap_sitk
-def quick_dilate(img, radius=3):
+def quick_dilate(img, radius=3, kernel=sitk.sitkBall):
     """Shortcut method for applying the sitk BinaryDilateImageFilter"""
     if isinstance(img, np.ndarray):
         img = sitk.GetImageFromArray(img)
     dil_filter = sitk.BinaryDilateImageFilter()
-    dil_filter.SetKernelType(sitk.sitkBall)
+    dil_filter.SetKernelType(kernel)
     dil_filter.SetKernelRadius(radius)
     dil_filter.SetForegroundValue(1)
     dil_filter.SetBackgroundValue(0)
@@ -80,12 +80,12 @@ def quick_dilate(img, radius=3):
 
 
 @wrap_sitk
-def quick_erode(img, radius=3):
+def quick_erode(img, radius=3, kernel=sitk.sitkBall):
     """Shortcut for applying the sitk BinaryErodeImageFilter"""
     if isinstance(img, np.ndarray):
         img = sitk.GetImageFromArray(img)
     dil_filter = sitk.BinaryErodeImageFilter()
-    dil_filter.SetKernelType(sitk.sitkBall)
+    dil_filter.SetKernelType(kernel)
     dil_filter.SetKernelRadius(radius)
     dil_filter.SetForegroundValue(1)
     dil_filter.SetBackgroundValue(0)
@@ -702,14 +702,31 @@ def get_shared_bounds(*masks, target_label: int = 1, extent='max', as_slice: boo
                 elif extent[idx] == 'min':
                     bounds[idx] = [max(bounds[idx][0], mask_bounds[idx][0]),
                                    min(bounds[idx][1], mask_bounds[idx][1])]
+    return pad_bounds(bounds, padding, as_slice=as_slice)
+
+
+def pad_bounds(bounds, padding, as_slice=False):
+    """Add padding to bounds
+
+    Parameters
+    ----------
+    bounds : Iterable[Iterable[int, int]]
+        The bounds to pad - should be in format [[lower_bound, upper_bound], ...] for each dimension
+    padding : int | Iterable[int] | Iterable[Iterable[int, int]]
+        The padding to apply, can be a single value for all padding, a single value per dimension, or a lower and upper value per dimension
+    as_slice : bool, optional
+        Whether to return the bounds as a slice, by default False
+    """
+    bounds = [item.copy() for item in bounds]
     padding = gouda.force_len(padding, len(bounds))
     for idx in range(len(bounds)):
         axis_pad = gouda.force_len(padding[idx], 2)
         bounds[idx][0] = max(bounds[idx][0] - axis_pad[0], 0)
         bounds[idx][1] += axis_pad[1]
     if as_slice:
-        bounds = tuple([slice(*item) for item in bounds])
-    return bounds
+        return tuple([slice(*b) for b in bounds])
+    else:
+        return bounds
 
 
 def split_itk_image_channels(image):
@@ -834,6 +851,96 @@ def remove_small_items(label_img, min_size=20):
         return SmartImage(result)
     else:
         return result
+
+
+def reassign_small_objects(label, max_size=50):
+    """Assign small objects to the label of the object they share the most border with
+
+    Parameters
+    ----------
+    label : ImageType
+        label to correct
+    max_size : int, optional
+        Maximum size of objects to reassign (larger than this are not corrected), by default 50
+    """
+    label = as_image(label)
+    new_label = zeros_like(label)
+    for label_idx in label.unique():
+        local_label = label == label_idx
+        local_cc = local_label.connected_components()
+        local_stats = local_cc.label_shape_stats()
+        objects = [(object_idx, local_stats.GetPhysicalSize(object_idx)) for object_idx in local_stats.GetLabels()]
+        objects = sorted(objects, key=lambda x: x[1], reverse=False)
+        remapper = {}
+        for object_idx, size in objects:
+            if size > max_size:
+                remapper[object_idx] = label_idx
+                continue
+            local_object = local_cc == object_idx
+            object_bounds = get_bounds(local_object)[1]
+            object_bounds = pad_bounds(object_bounds, 2, as_slice=True)
+
+            local_object = local_object[object_bounds]
+            local_region = label[object_bounds]
+            neighborhood = quick_dilate(local_object, radius=1, kernel=sitk.sitkCross) - local_object
+            neighbors = local_region.as_view()[neighborhood.as_array().astype(bool)]
+            idx, counts = np.unique(neighbors, return_counts=True)
+            idx = idx[np.argsort(counts)][::-1]
+            counts = counts[np.argsort(counts)][::-1]
+            if idx[0] == 0 and len(idx) > 1:
+                neighbor = idx[1]
+            else:
+                neighbor = idx[0]
+            remapper[object_idx] = int(neighbor)
+        local_cc = local_cc.change_label(remapper)
+        new_label = new_label + local_cc.astype(new_label.dtype)
+    return new_label
+
+
+def remove_distant_items(label, distance_thresh: float = 5, size_thresh: float = 0):
+    """Remove objects in the label that are distant from the largest object
+
+    Parameters
+    ----------
+    label : ImageType
+        Label image to remove items from
+    distance_thresh : int, optional
+        Maximum allowed distance from the largest object (in physcial units), by default 5
+    size_thresh : int, optional
+        Minimum physical size before an object is considered a separate entity (if <=0, this is ignored), by default 0
+
+    Note
+    ----
+    This removes objects present in the label that are too far from the largest object. This is determined by measuring the closest points between the largest object and each other separate object. If size_thresh is set to a non-zero value, then objects that are larger than that physical size are never removed regardless of distance.
+    """
+    label = as_image(label)
+    label_cc = label.connected_components()
+    label_stats = label_cc.label_shape_stats()
+
+    if label_stats.GetNumberOfLabels() > 1:
+        largest_idx = (0, -1)
+        for label_idx in label_stats.GetLabels():
+            size = label_stats.GetPhysicalSize(label_idx)
+            if size > largest_idx[0]:
+                largest_idx = (size, label_idx)
+
+        largest_label = label_cc == largest_idx[1]
+        dist_map = sitk.SignedMaurerDistanceMap(largest_label.sitk_image, insideIsPositive=False, squaredDistance=False, useImageSpacing=True, backgroundValue=0)
+        dist_arr = sitk.GetArrayViewFromImage(dist_map)
+        remapper = {}
+        for label_idx in label_stats.GetLabels():
+            if label_idx == largest_idx[1]:
+                remapper[label_idx] = 1
+                continue
+            elif size_thresh > 0 and label_stats.GetPhysicalSize(label_idx) > size_thresh:
+                remapper[label_idx] = 1
+                continue
+            local_dist = dist_arr[(label_cc == label_idx).as_view().astype(bool)].min()
+            remapper[label_idx] = int(local_dist < distance_thresh)
+        label_cc = label_cc.change_label(remapper)
+        return label_cc.astype(label.dtype)
+    else:
+        return label
 
 
 def get_total_hull(arr):
