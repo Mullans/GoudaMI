@@ -53,6 +53,27 @@ def get_centroid_metrics(label_image, pred_image, return_centroids=False, return
 
 
 def get_comparison_metrics(label_image, pred_image, overlap_metrics=True, distance_metrics=True, fully_connected=True, surface_dice=True, nsd_tol=2, labels=None):
+    """Get comparison metrics between a label and a predicted label
+
+    Parameters
+    ----------
+    label_image : ImageType
+        The label image (generally independent standard or ground truth)
+    pred_image : ImageType
+        The predicted label image
+    overlap_metrics : bool, optional
+        Whether to compute overlap metrics (Dice, Jaccard, FP, FN), by default True
+    distance_metrics : bool, optional
+        Whether to compute distance metrics (ASSD, RSSD, Hausdorff, Hausdorff95), by default True
+    fully_connected : bool, optional
+        In distance metrics - whether connected components are defined by face connectivity (False) or face+edge+vertex connectivity (True), by default True
+    surface_dice : bool, optional
+        Whether to compute Normalized Surface Dice, by default True
+    nsd_tol : int | list, optional
+        Tolerance value(s) to use for computing Normalized Surface Dice in physical units, should be listed based on ascending order of label indices being compared, by default 2
+    labels : list, optional
+        The subset of label values to evaluate if you don't want to evaluate all non-zero labels, by default None
+    """
     if get_image_type(label_image) != 'sitk':
         label_image = as_image(label_image).sitk_image
     if get_image_type(pred_image) != 'sitk':
@@ -414,7 +435,6 @@ def normalized_surface_dice(label1: sitk.Image, label2: sitk.Image, tol: float =
             pred_surf_area = np.sum(pred_surfel_area)
             results.append((gt_overlap + pred_overlap) / (gt_surf_area + pred_surf_area))
         return results
-
 
 
 def get_distances(label1: sitk.Image, label2: sitk.Image, direction: str = 'both', use_squared_distance: bool = False, use_image_spacing: bool = True, fully_connected_contours: bool = False):
