@@ -351,7 +351,7 @@ def normalized_surface_dice(label1: sitk.Image, label2: sitk.Image, tol: float =
     ----
     The Normalized Surface Dice (aka Normalized Surface Distance, Surface Dice) is an uncertainty-aware measure used to compare the overlap between two segmentation surfaces. Rather than using voxel overlap, it measures the overlap of the surfaces within a tolerance distance of eachother. This tolerance can be based on domain-requirements or inter-observer variability.
     Original Pub: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8314151/
-    Original Implementation: https://github.com/deepmind/surface-distance/
+    Implementation adapted from: https://github.com/deepmind/surface-distance/
 
     Some recommended tolerances in CT images (from the FLARE22 competition):
         * Adrenal Gland (Left/Right)- 2mm

@@ -833,7 +833,7 @@ def get_objects_within_range(binary_image, min_size=100, max_size=np.inf, merge_
     return labels
 
 
-def remove_small_items(label_img, min_size=20):
+def remove_small_items(label_img, min_size=20, use_physical_size=False):
     image_type = get_image_type(label_img)
     if image_type == 'smartimage':
         label_img = label_img.sitk_image
@@ -844,7 +844,10 @@ def remove_small_items(label_img, min_size=20):
     labels = lfilter.GetLabels()
     changes = {}
     for label in labels:
-        changes[label] = 0 if lfilter.GetNumberOfPixels(label) < min_size else 1
+        if use_physical_size:
+            changes[label] = 0 if lfilter.GetPhysicalSize(label) < min_size else 1
+        else:
+            changes[label] = 0 if lfilter.GetNumberOfPixels(label) < min_size else 1
     component_mask = sitk.ChangeLabel(components, changeMap=changes)
     result = label_img * sitk.Cast(component_mask, label_img.GetPixelID())
     if image_type == 'smartimage':
@@ -853,7 +856,7 @@ def remove_small_items(label_img, min_size=20):
         return result
 
 
-def reassign_small_objects(label, max_size=50):
+def reassign_small_objects(label, max_size=50, n_largest=0, neighbor_kernel=sitk.sitkCross, ignore_labels=None):
     """Assign small objects to the label of the object they share the most border with
 
     Parameters
@@ -862,18 +865,63 @@ def reassign_small_objects(label, max_size=50):
         label to correct
     max_size : int, optional
         Maximum size of objects to reassign (larger than this are not corrected), by default 50
+    n_largest : int, optional
+        If > 0, the number of objects to keep for each label class - all other objects are reassigned or removed, the default is 0
+    neighbor_kernel : int, optional
+        The SimpleITK KernelEnum for the structuring element used to check object borders, the default is 3 (SimpleITK.sitkCross)
+    ignore_labels : list[int] | None, optional
+        Labels to leave unchanged (other objects can still be reassigned to this class), the default is None
+
+    Note
+    ----
+    If n_largest <= 0, then all separate objects with a size less than max_size will be reassigned to the class of the object they share the largest border with.
+    If n_largest > 0, then the n_largest objects with the greatest physical size for each class are unchanged, and all other objects are reassigned to the class of the unchanged objects that they share the largest border with.
+    In both cases, if a small object does not share any border, then it will be removed.
     """
     label = as_image(label)
     new_label = zeros_like(label)
+    n_largest = max(n_largest, 0)  # negatives could cause issues
+    if ignore_labels is None:
+        ignore_labels = []
+
+    if n_largest > 0:
+        early_stopping = True
+        for label_idx in label.unique():
+            local_label = label == label_idx
+            if label_idx in ignore_labels:
+                new_label += local_label * label_idx
+                continue
+            local_cc = local_label.connected_components()
+            local_stats = local_cc.label_shape_stats()
+            objects = [(object_idx, local_stats.GetPhysicalSize(object_idx)) for object_idx in local_stats.GetLabels()]
+            if len(objects) > n_largest:
+                early_stopping = False
+            objects = sorted(objects, key=lambda x: x[1], reverse=True)
+            remapper = {}
+            for object_idx, size in objects[:n_largest]:
+                remapper[object_idx] = label_idx
+            for object_idx, size in objects[n_largest:]:
+                remapper[object_idx] = 0
+            new_label += local_cc.change_label(remapper)
+        if early_stopping:
+            # Return early if no objects need to be removed/changed
+            return label
+
     for label_idx in label.unique():
         local_label = label == label_idx
+        if label_idx in ignore_labels:
+            if n_largest <= 0:
+                new_label += local_label * label_idx
+            continue
         local_cc = local_label.connected_components()
         local_stats = local_cc.label_shape_stats()
         objects = [(object_idx, local_stats.GetPhysicalSize(object_idx)) for object_idx in local_stats.GetLabels()]
-        objects = sorted(objects, key=lambda x: x[1], reverse=False)
+        objects = sorted(objects, key=lambda x: x[1], reverse=n_largest > 0)
         remapper = {}
-        for object_idx, size in objects:
-            if size > max_size:
+        for object_idx, size in objects[:n_largest]:
+            remapper[object_idx] = 0
+        for object_idx, size in objects[n_largest:]:
+            if size > max_size and not n_largest > 0:
                 remapper[object_idx] = label_idx
                 continue
             local_object = local_cc == object_idx
@@ -881,8 +929,11 @@ def reassign_small_objects(label, max_size=50):
             object_bounds = pad_bounds(object_bounds, 2, as_slice=True)
 
             local_object = local_object[object_bounds]
-            local_region = label[object_bounds]
-            neighborhood = quick_dilate(local_object, radius=1, kernel=sitk.sitkCross) - local_object
+            if n_largest > 0:
+                local_region = new_label[object_bounds]
+            else:
+                local_region = label[object_bounds]
+            neighborhood = quick_dilate(local_object, radius=1, kernel=neighbor_kernel) - local_object
             neighbors = local_region.as_view()[neighborhood.as_array().astype(bool)]
             idx, counts = np.unique(neighbors, return_counts=True)
             idx = idx[np.argsort(counts)][::-1]
@@ -892,8 +943,10 @@ def reassign_small_objects(label, max_size=50):
             else:
                 neighbor = idx[0]
             remapper[object_idx] = int(neighbor)
-        local_cc = local_cc.change_label(remapper)
-        new_label = new_label + local_cc.astype(new_label.dtype)
+        if len(remapper) > 0:
+            local_cc = local_cc.change_label(remapper)
+            new_label = new_label + local_cc.astype(new_label.dtype)
+
     return new_label
 
 
