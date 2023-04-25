@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 import glob
+import numbers
 import os
 import warnings
 from typing import List, Optional, Union
@@ -12,6 +13,13 @@ import SimpleITK as sitk
 from GoudaMI.constants import SmartType
 
 from GoudaMI.optional_imports import itk
+
+
+def clean_err(err_string):
+    """Replace angle brackets with unicode equivalents - This works around an issue with VSCode error messages in interactive mode where errors are displayed with html.
+    """
+    translate_dict = str.maketrans({'<': '\u3008', '>': '\u3009'})
+    return err_string.translate(translate_dict)
 
 
 def get_image_type(image):
@@ -144,7 +152,8 @@ class SmartImage(object):
                 self.__updated_sitk = True
                 self.path = ''
             else:
-                raise ValueError("Unsupported datatype: {}".format(type(path)))
+                err_type = clean_err(str(type(path)))
+                raise ValueError(f"Unsupported datatype: {err_type}")
         else:
             self.path = path
         # self.image
@@ -161,38 +170,30 @@ class SmartImage(object):
         self.__stddev_intensity = None
         self.__var_intensity = None
 
-    def __run_minmax(self):
-        image = self.image
-        if isinstance(image, sitk.Image):
-            filt = sitk.MinimumMaximumImageFilter()
-            filt.Execute(image)
-            self.__maximum_intensity = filt.GetMaximum()
-            self.__minimum_intensity = filt.GetMinimum()
-        elif isinstance(image, itk.Image):
-            raise NotImplementedError('This is on the todo list')
-
     def __run_image_stats(self):
         image = self.image
         if self.image_type == 'sitk':
             filt = sitk.StatisticsImageFilter()
             filt.Execute(image)
-            self.__maximum_intensity = filt.GetMaximum()
-            self.__minimum_intensity = filt.GetMinimum()
-            self.__mean_intensity = filt.GetMean()
-            self.__sum_intensity = filt.GetSum()
-            self.__stddev_intensity = filt.GetSigma()
-            self.__var_intensity = filt.GetVariance()
         elif self.image_type == 'itk':
-            raise NotImplementedError('ITK backed stats are yet-to-come')
+            filt = itk.StatisticsImageFilter[image].New(image)
+            filt.Update()
+
+        self.__maximum_intensity = filt.GetMaximum()
+        self.__minimum_intensity = filt.GetMinimum()
+        self.__mean_intensity = filt.GetMean()
+        self.__sum_intensity = filt.GetSum()
+        self.__stddev_intensity = filt.GetSigma()
+        self.__var_intensity = filt.GetVariance()
 
     def min(self):
         if self.__minimum_intensity is None:
-            self.__run_minmax()
+            self.__run_image_stats()
         return self.__minimum_intensity
 
     def max(self):
         if self.__maximum_intensity is None:
-            self.__run_minmax()
+            self.__run_image_stats()
         return self.__maximum_intensity
 
     def mean(self):
@@ -373,7 +374,9 @@ class SmartImage(object):
             if itk_dtype is None:
                 raise ValueError(f'Unknown dtype: {dtype}')
             dim = image.GetImageDimension()
-            image = itk.CastImageFilter[image, itk.Image[itk_dtype, dim]].New(image)
+            cast_filter = itk.CastImageFilter[image, itk.Image[itk_dtype, dim]].New(image)
+            cast_filter.Update()
+            image = cast_filter.GetOutput()
             if in_place:
                 return self.update(image)
         else:
@@ -436,7 +439,7 @@ class SmartImage(object):
             elif isinstance(direction, itk.Matrix):
                 direction = itk.GetArrayFromMatrix(direction).flatten()
             else:
-                raise TypeError('Unknown direction type: {}'.format(type(direction)))
+                raise TypeError('Unknown direction type: {}'.format(clean_err(type(direction))))
             self.__sitk_image.SetDirection(direction)
             self.__updated_sitk = True
         elif self.image_type == 'itk':
@@ -451,7 +454,7 @@ class SmartImage(object):
                     raise ValueError('Direction matrices must be 1- or 2d.')
                 direction = itk.GetMatrixFromArray(direction)
             else:
-                raise TypeError('Unknown direction type: {}'.format(type(direction)))
+                raise TypeError('Unknown direction type: {}'.format(clean_err(type(direction))))
             self.__itk_image.SetDirection(direction)
             self.__updated_itk = True
         self.__reset_internals(spatial_only=True)
@@ -876,7 +879,7 @@ class SmartImage(object):
             resampleFilter.SetOutputSpacing(ref.GetSpacing())
             resampleFilter.SetOutputDirection(ref.GetDirection())
         else:
-            raise ValueError("Unknown reference type: '{}'".format(type(ref)))
+            raise ValueError("Unknown reference type: '{}'".format(clean_err(type(ref))))
         result = resampleFilter.Execute(image)
         if in_place:
             self.update(result)
@@ -975,19 +978,22 @@ class SmartImage(object):
 
     def __iadd__(self, other):
         self.__perform_op(sitk.Add, itk.AddImageFilter, other, in_place=True)
-        # self.update(result)  # TODO - check that inplace ops are working
         return self
 
     def __eq__(self, other):
         image = self.image
+        # TODO - update wrapping for all image types and add itk comparisons
         if self.image_type == 'sitk':
             if isinstance(other, SmartImage):  # unwrap other as-needed
                 other = other.sitk_image
             return SmartImage(image.__eq__(other))
         elif self.image_type == 'itk':
+            # if isinstance(other, SmartImage):
+            #     other = other.itk_image
+            # ITK doesn't seem to have direct comparison methods...
             raise ValueError("Comparison operators are not supported yet for itk")
         else:
-            raise ValueError('self.image is type {}'.format(type(image)))
+            raise ValueError('self.image is type {}'.format(clean_err(type(image))))
 
     def __gt__(self, other):
         image = self.image
@@ -998,7 +1004,7 @@ class SmartImage(object):
         elif self.image_type == 'itk':
             raise ValueError("Comparison operators are not supported yet for itk")
         else:
-            raise ValueError('self.image is type {}'.format(type(image)))
+            raise ValueError('self.image is type {}'.format(clean_err(type(image))))
 
     def __lt__(self, other):
         image = self.image
@@ -1009,7 +1015,7 @@ class SmartImage(object):
         elif self.image_type == 'itk':
             raise ValueError("Comparison operators are not supported yet for itk")
         else:
-            raise ValueError('self.image is type {}'.format(type(image)))
+            raise ValueError('self.image is type {}'.format(clean_err(type(image))))
 
     def __mul__(self, other):
         try:
@@ -1044,13 +1050,30 @@ class SmartImage(object):
         elif self.image_type == 'itk':
             raise ValueError("Comparison operators are not supported yet for itk")
         else:
-            raise ValueError('self.image is type {}'.format(type(image)))
+            raise ValueError('self.image is type {}'.format(clean_err(type(image))))
 
     def __sub__(self, other):
         return self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, in_place=False, autocast=True)
 
+    def __itkrsub__(self, other, image):
+        if isinstance(other, numbers.Number):
+            itk_type = itk.template(image)[1][0]
+            type_str = SmartType.as_string(itk_type)
+            if type_str.startswith('u'):
+                cast_filt = itk.CastImageFilter[image, itk.Image[itk.F, self.ndim]].New(image)
+                cast_filt.Update()
+
+                result = itk.AddImageFilter(cast_filt.GetOutput(), -1 * other)
+                result = itk.MultiplyImageFilter(result, -1)
+
+                uncast_filt = itk.CastImageFilter[result, itk.Image[itk_type, self.ndim]].New(result)
+                uncast_filt.Update()
+                return uncast_filt.GetOutput()
+        else:
+            return itk.SubtractImageFilter(other, image)
+
     def __rsub__(self, other):
-        return self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, self_first=False, in_place=False, autocast=True)
+        return self.__perform_op(sitk.Subtract, self.__itkrsub__, other, self_first=False, in_place=False, autocast=True)
 
     def __isub__(self, other):
         self.__perform_op(sitk.Subtract, itk.SubtractImageFilter, other, in_place=True)
@@ -1127,10 +1150,15 @@ class SmartImage(object):
                 new_args.append(item)
             if autocast:
                 output_type = SmartType.as_itk(autocast if isinstance(autocast, str) else output_type)
+                output_type = itk.Image[output_type, self.ndim]
                 for idx in range(len(new_args)):
                     if get_image_type(new_args[idx]) == 'itk':
-                        new_args[idx] = itk.CastImageFilter[new_args[idx], output_type].New()(new_args[idx])
-                image = itk.CastImageFilter[image, output_type].New()(image)
+                        filt = itk.CastImageFilter[new_args[idx], output_type].New(new_args[idx])
+                        filt.Update()
+                        new_args[idx] = filt.GetOutput()
+                filt = itk.CastImageFilter[image, output_type].New(image)
+                filt.Update()
+                image = filt.GetOutput()
             if self_first:
                 result = itk_op(image, *new_args, **kwargs)
             else:
@@ -1155,7 +1183,7 @@ class SmartImage(object):
             image[key] = val
         else:
             # Should never throw this error
-            raise ValueError('Unknown image type: {}'.format(type(image)))
+            raise ValueError('Unknown image type: {}'.format(clean_err(type(image))))
 
     def __getitem__(self, key):
         image = self.image
@@ -1166,7 +1194,7 @@ class SmartImage(object):
                 return as_image(result)
         else:
             # Should never throw this error
-            raise ValueError('Unknown image type: {}'.format(type(image)))
+            raise ValueError('Unknown image type: {}'.format(clean_err(type(image))))
 
     def apply(self, op, *args, image_type=None, in_place=True, **kwargs):
         """Apply an operation to the image
@@ -1211,7 +1239,8 @@ def as_image(image: ImageArrayType) -> SmartImage:
     else:
         return image
 
-#TODO - maybe move to convert?
+
+# TODO - maybe move to convert?
 def as_image_type(image: ImageArrayType, output_type: str) -> ImageArrayType:
     """Convert an image to a specific type"""
     image_type = get_image_type(image)
@@ -1229,7 +1258,8 @@ def as_image_type(image: ImageArrayType, output_type: str) -> ImageArrayType:
     else:
         raise ValueError('Invalid image type: {}'.format(output_type))
 
-#TODO - Maybe move to ct_utils?
+
+# TODO - Maybe move to ct_utils?
 def zeros_like(image: Union[itk.Image, sitk.Image, SmartImage, dict], dtype: Optional[str] = None):
     """Return an image of zeros with the same physical parameters as the input
 

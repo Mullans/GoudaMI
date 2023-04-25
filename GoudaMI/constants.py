@@ -114,7 +114,7 @@ class SmartType():
                 raise ValueError('`bool` types are not supported for images. Please use `uint8` instead.')
             elif item_type == -2 or item_type == -3:
                 raise ValueError('`int` and `float` types are not supported. Please use `int32`, `int64`, `float32`, and `float64` instead.')
-            elif item_type > 0:
+            elif item_type >= 0:
                 return item_type
         raise ValueError(f'Unknown data type: `{data_type}`', type(data_type))
 
