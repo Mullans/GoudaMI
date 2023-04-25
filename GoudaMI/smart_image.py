@@ -340,6 +340,7 @@ class SmartImage(object):
         else:
             raise ValueError("This should never reach here")
 
+
     def as_view(self):
         image = self.image
         if self.image_type == 'itk':
@@ -1186,6 +1187,15 @@ class SmartImage(object):
             raise ValueError('Unknown image type: {}'.format(clean_err(type(image))))
 
     def __getitem__(self, key):
+        if key == 'itk':
+            return self.itk_image
+        elif key == 'sitk':
+            return self.sitk_image
+        elif key == 'array':
+            return self.as_array()
+        elif key == 'view':
+            return self.as_view()
+
         image = self.image
         if self.image_type == 'sitk' or self.image_type == 'itk':
             result = image[key]

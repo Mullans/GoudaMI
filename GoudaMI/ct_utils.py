@@ -12,7 +12,7 @@ import SimpleITK as sitk
 
 from GoudaMI import io
 from GoudaMI.constants import MIN_INTENSITY_PULMONARY_CT, SmartType
-from GoudaMI.convert import as_view, wrap_numpy2numpy, wrap_sitk
+from GoudaMI.convert import as_view, wrap_numpy2numpy, wrap_image_func
 from GoudaMI.optional_imports import itk
 from GoudaMI.smart_image import (ImageRefType, ImageType, SmartImage, as_image, as_image_type, get_image_type, zeros_like)
 
@@ -41,7 +41,7 @@ def clip_image(image: ImageType, low: float, high: float):
         raise TypeError('Unknown image type: {}'.format(type(image)))
 
 
-@wrap_sitk
+@wrap_image_func('sitk')
 def quick_open(img, radius=3, kernel=sitk.sitkBall):
     """Shortcut method for applying the sitk BinaryMorphologicalOpeningImageFilter"""
     if isinstance(img, np.ndarray):
@@ -54,7 +54,7 @@ def quick_open(img, radius=3, kernel=sitk.sitkBall):
     return opener.Execute(img)
 
 
-@wrap_sitk
+@wrap_image_func('sitk')
 def quick_close(img, radius=3, kernel=sitk.sitkBall):
     """Shortcut method for applying the sitk BinaryMorphologicalClosingImageFilter"""
     if isinstance(img, np.ndarray):
@@ -66,7 +66,7 @@ def quick_close(img, radius=3, kernel=sitk.sitkBall):
     return closer.Execute(img)
 
 
-@wrap_sitk
+@wrap_image_func('sitk')
 def quick_dilate(img, radius=3, kernel=sitk.sitkBall):
     """Shortcut method for applying the sitk BinaryDilateImageFilter"""
     if isinstance(img, np.ndarray):
@@ -79,7 +79,7 @@ def quick_dilate(img, radius=3, kernel=sitk.sitkBall):
     return dil_filter.Execute(img)
 
 
-@wrap_sitk
+@wrap_image_func('sitk')
 def quick_erode(img, radius=3, kernel=sitk.sitkBall):
     """Shortcut for applying the sitk BinaryErodeImageFilter"""
     if isinstance(img, np.ndarray):
@@ -1381,7 +1381,7 @@ def multiply_vector_image(image: sitk.Image, scalar: Union[float, Sequence[float
     return sitk.Compose([sitk.VectorIndexSelectionCast(image, i) * scalar[i % len(scalar)] for i in range(image.GetNumberOfComponentsPerPixel())])
 
 
-@wrap_sitk
+@wrap_image_func('sitk')
 def elastic_deformation(image: ImageType, sigma: Union[float, tuple[float, ...]] = 1.0, alpha: Union[float, tuple[float, ...]] = 2.0, interp=sitk.sitkLinear, seed: Optional[Union[np.random.Generator, int]] = None) -> sitk.Image:
     """Perform a random elastic deformation on the image.
 
@@ -1480,7 +1480,7 @@ def wrap_bounds(func, bg_val=0):
     return wrapped_func
 
 
-@wrap_sitk
+@wrap_image_func('sitk')
 def pad_to_same(*images: sitk.Image, bg_val: int = 0, upper_pad_only: bool = True, share_info: bool = False) -> list[sitk.Image]:
     """Pad all images to the same size.
 
@@ -1519,7 +1519,7 @@ def pad_to_same(*images: sitk.Image, bg_val: int = 0, upper_pad_only: bool = Tru
     return results
 
 
-@wrap_sitk
+@wrap_image_func('sitk')
 def pad_to_cube(img: sitk.Image, bg_val=0) -> sitk.Image:
     """Constant pad image so all sides are the same length.
 
