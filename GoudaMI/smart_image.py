@@ -46,7 +46,7 @@ def get_image_type(image):
     elif "<class 'str'>" == type_str:
         return 'string'  # this could get hit for paths?
     else:
-        return None
+        return type_str
 
 
 def get_dtype(image):
@@ -340,7 +340,6 @@ class SmartImage(object):
         else:
             raise ValueError("This should never reach here")
 
-
     def as_view(self):
         image = self.image
         if self.image_type == 'itk':
@@ -351,6 +350,7 @@ class SmartImage(object):
             raise ValueError("This should never reach here")
 
     def astype(self, dtype, allow_vector=True, in_place=False, image_type=None, return_smart_image=True):
+        # TODO - allow dtype to be 'sitk'/'itk' to change image type without changing dtype
         image_type = self.default_type if image_type is None else image_type
         if image_type == 'sitk':
             image = self.sitk_image
@@ -780,6 +780,7 @@ class SmartImage(object):
         in_place : bool
             If true, modifies the current image. Otherwise, returns the resampled copy.
         """
+        #TODO - add support for itk resampling
         image = self.sitk_image
 
         origin = self.GetOrigin() if origin is None else origin
@@ -829,6 +830,7 @@ class SmartImage(object):
             return SmartImage(result)
 
     def resample_to_ref(self, ref, interp='auto', outside_val=None, in_place=False):
+        # TODO - have resample_to_ref call resample
         if interp == 'auto':
             if self.min() >= 0 and self.max() < 255 and 'f' not in str(self.dtype):
                 #  This should be a label
@@ -1195,6 +1197,8 @@ class SmartImage(object):
             return self.as_array()
         elif key == 'view':
             return self.as_view()
+        elif key == 'smart':
+            return self
 
         image = self.image
         if self.image_type == 'sitk' or self.image_type == 'itk':

@@ -1025,15 +1025,9 @@ def get_ndim_hull(image):
     return result
 
 
+@wrap_image_func('sitk')
 def get_label_hull(label):
     """Get the convex hull of each slice of a label image"""
-    if isinstance(label, SmartImage):
-        label = label.sitk_image
-    elif isinstance(label, sitk.Image):
-        pass
-    else:
-        raise NotImplementedError('Not implemented for type `{}` yet'.format(type(label)))
-
     arr = sitk.GetArrayViewFromImage(label)
     result = np.zeros_like(arr)
     for slice_idx in range(arr.shape[0]):
@@ -1666,3 +1660,60 @@ def get_overlapping_objects(label: ImageType, pred: ImageType, tol: int = 3, run
         overlap_keys = pred[key_bounds].unique()
         overlaps[key] = overlap_keys
     return overlaps
+
+
+@wrap_image_func('smart')
+def get_vessel_image(image, hessian_sigma=1.5, alpha1=0.5, alpha2=2.0, clip_input=('min', -500), clip_output=(15, 'max'), output_range=None):
+    """Get the vesselness measure of an input image (intended for pulmonary CT)
+
+    Parameters
+    ----------
+    image : GoudaMI.SmartImage
+        Input image
+    hessian_sigma : float, optional
+        Sigma value for the hessian recursive gaussian filter, by default 1.0
+    alpha1 : float, optional
+        Vesselness parameter, by default 0.5
+    alpha2 : float, optional
+        Vesselness parameter, by default 2.0
+    output_range : Optional[tuple[float, float]], optional
+        The range to scale the output to, by default None
+
+    Note
+    ----
+    Adapted from: https://examples.itk.org/src/filtering/imagefeature/segmentbloodvessels/documentation
+    Algorithm from: http://www.image.med.osaka-u.ac.jp/member/yoshi/paper/linefilter.pdf
+    """
+    if clip_input is not None:
+        input_min, input_max = clip_input
+        if input_min == 'min':
+            input_min = image.min()
+        if input_max == 'max':
+            input_max = image.max()
+        image = image.window(min=input_min, max=input_max)
+    hessian_image = itk.hessian_recursive_gaussian_image_filter(image.itk_image, sigma=hessian_sigma)
+    vesselness_filter = itk.Hessian3DToVesselnessMeasureImageFilter[itk.F].New()
+    vesselness_filter.SetInput(hessian_image)
+    vesselness_filter.SetAlpha1(alpha1)
+    vesselness_filter.SetAlpha2(alpha2)
+    vesselness_filter.Update()
+    vessel_image = SmartImage(vesselness_filter.GetOutput())
+    if output_range is not None:
+        result_min, result_max = output_range
+        if result_min == 'min':
+            result_min = vessel_image.min()
+        if result_max == 'max':
+            result_max = vessel_image.max()
+    if clip_output is not None:
+        output_min, output_max = clip_output
+        if output_min == 'min':
+            output_min = vessel_image.min()
+        if output_max == 'max':
+            output_max = vessel_image.max()
+        if output_range is not None:
+            vessel_image = vessel_image.window(min=output_min, max=output_max, output_min=result_min, output_max=result_max)
+        else:
+            vessel_image = vessel_image.window(min=output_min, max=output_max)
+    elif output_range is not None:
+        vessel_image = vessel_image.window(output_min=result_min, output_max=result_max)
+    return vessel_image

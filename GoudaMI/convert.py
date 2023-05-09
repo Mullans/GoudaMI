@@ -137,13 +137,14 @@ def wrap_image_func(image_type: str):
     Callable
         The wrapped function decorator
     """
+    # TODO - Add conversion to/from numpy while keeping physical properties
     def internal_wrapper(func):
         @functools.wraps(func)
         def wrapped_func(*args, **kwargs):
             new_args = []
             return_type = None
             for item in args:
-                if isinstance(item, (itk.Image, sitk.Image, SmartImage)):
+                if isinstance(item, (itk.Image, sitk.Image, SmartImage, np.ndarray)):
                     if return_type is None:
                         return_type = get_image_type(item)
                     new_args.append(as_image(item)[image_type])
