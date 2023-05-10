@@ -10,7 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import SimpleITK as sitk
 
-from GoudaMI.constants import SmartType
+from GoudaMI.smart_type import get_image_type, SmartType, SmartInterpolator
 
 from GoudaMI.optional_imports import itk
 
@@ -20,49 +20,6 @@ def clean_err(err_string):
     """
     translate_dict = str.maketrans({'<': '\u3008', '>': '\u3009'})
     return err_string.translate(translate_dict)
-
-
-def get_image_type(image):
-    """Convenience method to get object type without imports (in case itk/vtk is not installed)"""
-    type_str = str(type(image))
-    if 'itk.itkImage' in type_str:
-        return 'itk'
-    elif 'SimpleITK.ImageFileReader' in type_str:
-        return 'sitkreader'
-    elif 'SimpleITK.Image' in type_str:
-        return 'sitk'
-    elif 'NDArrayITKBase' in type_str or 'ndarray' in type_str:
-        return 'numpy'
-    elif 'SmartImage' in type_str:
-        return 'smartimage'
-    elif 'vtkPolyData' in type_str:
-        return 'vtk_polydata'
-    elif "<class 'dict'>" == type_str:
-        return 'dict'
-    elif 'goudapath' in type_str:
-        return 'goudapath'
-    elif isinstance(image, os.PathLike):
-        return 'path'  # this should very rarely get hit
-    elif "<class 'str'>" == type_str:
-        return 'string'  # this could get hit for paths?
-    else:
-        return type_str
-
-
-def get_dtype(image):
-    """Convenience method to get object pixel-type without imports"""
-    image_type = get_image_type(image)
-    if image_type == 'itk':
-        out_type = itk.template(image)[1][0]
-    elif image_type == 'sitk':
-        out_type = image.GetPixelID()
-    elif image_type == 'numpy' or image_type == 'smartimage':
-        out_type = image.dtype
-    elif image_type == 'dict':
-        out_type = image['dtype']
-    else:
-        return None
-    return SmartType.as_string(out_type)
 
 
 def _search_for_dicom(base_dir):
@@ -241,6 +198,14 @@ class SmartImage(object):
         return 'vector' in self.dtype
 
     @property
+    def num_components(self):
+        if not self.loaded:
+            ncomp = self.__load_meta('ncomp')
+            if ncomp is not None:
+                return ncomp
+        return self.image.GetNumberOfComponentsPerPixel()
+
+    @property
     def image_type(self):
         if self.__image_type is None:
             if self.__itk_image is None and self.__sitk_image is not None:
@@ -362,7 +327,7 @@ class SmartImage(object):
                 raise ValueError(f"Unknown dtype: {dtype}")
 
             if 'vector' in self.dtype and not allow_vector:
-                ncomp = image.GetNumberOfComponentsPerPixel()
+                ncomp = self.num_components
                 result = [sitk.VectorIndexSelectionCast(image, idx, sitk_type) for idx in range(ncomp)]
                 image = sitk.JoinSeries(result)
             else:
@@ -400,7 +365,8 @@ class SmartImage(object):
                 'spacing': np.array(file_reader.GetSpacing()),
                 'direction': np.array(file_reader.GetDirection()),
                 'dtype': SmartType.as_string(file_reader.GetPixelID()),
-                'ndim': file_reader.GetDimension()
+                'ndim': file_reader.GetDimension(),
+                'ncomp': file_reader.GetNumberOfComponents()
             }
         return self.__meta_data[key]
 
@@ -780,7 +746,7 @@ class SmartImage(object):
         in_place : bool
             If true, modifies the current image. Otherwise, returns the resampled copy.
         """
-        #TODO - add support for itk resampling
+        # TODO - add support for itk resampling
         image = self.sitk_image
 
         origin = self.GetOrigin() if origin is None else origin
@@ -804,11 +770,14 @@ class SmartImage(object):
         if dryrun:
             return {'size': size, 'origin': origin, 'spacing': spacing, 'direction': direction}
 
+        # if interp == sitk.sitkNearestNeighbor
+
         if presmooth is None and interp != sitk.sitkNearestNeighbor:
             presmooth = np.all(self.GetSize() > size)
         elif presmooth is None:
             presmooth = 0
         presmooth = float(presmooth)
+
         size = np.array(size).astype(int).tolist()
         spacing = np.array(spacing).tolist()
         resample_filter = sitk.ResampleImageFilter()
@@ -1130,7 +1099,7 @@ class SmartImage(object):
             for item in args:
                 if get_image_type(item) in ['smartimage', 'itk']:
                     item = as_image(item).sitk_image
-                    output_type = np.result_type(output_type, get_dtype(item))
+                    output_type = np.result_type(output_type, SmartType.as_numpy(item))
                 new_args.append(item)
             if autocast:
                 output_type = SmartType.as_sitk(autocast if isinstance(autocast, str) else output_type)
@@ -1149,7 +1118,7 @@ class SmartImage(object):
             for item in args:
                 if get_image_type(item) in ['smartimage', 'sitk']:
                     item = as_image(item).itk_image
-                    output_type = np.result_type(output_type, get_dtype(item))
+                    output_type = np.result_type(output_type, SmartType.as_numpy(item))
                 new_args.append(item)
             if autocast:
                 output_type = SmartType.as_itk(autocast if isinstance(autocast, str) else output_type)

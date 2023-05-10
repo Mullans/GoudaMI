@@ -5,6 +5,7 @@ class DummyModule:
     # TODO: Come up with a better way to handle missing itk
     def __init__(self, module_name):
         self.__module_name = module_name
+        self.is_dummy = True
         self.Image = None
         self.SubtractImageFilter = None
         self.AndImageFilter = None

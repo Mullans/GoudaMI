@@ -11,10 +11,11 @@ import numpy.typing as npt
 import SimpleITK as sitk
 
 from GoudaMI import io
-from GoudaMI.constants import MIN_INTENSITY_PULMONARY_CT, SmartType
+from GoudaMI.constants import MIN_INTENSITY_PULMONARY_CT
 from GoudaMI.convert import as_view, wrap_numpy2numpy, wrap_image_func
 from GoudaMI.optional_imports import itk
 from GoudaMI.smart_image import (ImageRefType, ImageType, SmartImage, as_image, as_image_type, get_image_type, zeros_like)
+from GoudaMI.smart_type import SmartType
 
 # NOTE - reference for some interfacing: https://github.com/SimpleITK/SimpleITK/blob/4aabd77bddf508c1d55519fbf6002180a08f9208/Wrapping/Python/Python.i#L764-L794
 
