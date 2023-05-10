@@ -746,9 +746,6 @@ class SmartImage(object):
         in_place : bool
             If true, modifies the current image. Otherwise, returns the resampled copy.
         """
-        # TODO - add support for itk resampling
-        image = self.sitk_image
-
         origin = self.GetOrigin() if origin is None else origin
         direction = self.GetDirection() if direction is None else direction
 
@@ -769,29 +766,45 @@ class SmartImage(object):
 
         if dryrun:
             return {'size': size, 'origin': origin, 'spacing': spacing, 'direction': direction}
+        size = np.array(size).astype(int).tolist()
+        size = [int(item) for item in size]
+        spacing = np.array(spacing).tolist()
 
-        # if interp == sitk.sitkNearestNeighbor
-
-        if presmooth is None and interp != sitk.sitkNearestNeighbor:
+        interp_name, _ = SmartInterpolator.to_string(interp)
+        if presmooth is None and interp_name != 'nearest_neighbor':
             presmooth = np.all(self.GetSize() > size)
         elif presmooth is None:
             presmooth = 0
         presmooth = float(presmooth)
 
-        size = np.array(size).astype(int).tolist()
-        spacing = np.array(spacing).tolist()
-        resample_filter = sitk.ResampleImageFilter()
-        resample_filter.SetInterpolator(interp)
-        resample_filter.SetDefaultPixelValue(outside_val)
-        resample_filter.SetSize(size)
-        resample_filter.SetOutputOrigin(origin)
-        resample_filter.SetOutputSpacing(spacing)
-        resample_filter.SetOutputDirection(direction)
-
-        if presmooth > 0:
-            image = sitk.RecursiveGaussian(image, presmooth)
-
-        result = resample_filter.Execute(image)
+        image = self.image  # load the image if necessary
+        if self.image_type == 'sitk':
+            if presmooth > 0:
+                image = sitk.RecursiveGaussian(image, presmooth)
+            resample_filter = sitk.ResampleImageFilter()
+            interp = SmartInterpolator.as_sitk(interp)
+            resample_filter.SetInterpolator(interp)
+            resample_filter.SetDefaultPixelValue(outside_val)
+            resample_filter.SetSize(size)
+            resample_filter.SetOutputOrigin(origin)
+            resample_filter.SetOutputSpacing(spacing)
+            resample_filter.SetOutputDirection(direction)
+            result = resample_filter.Execute(image)
+        elif self.image_type == 'itk':
+            direction = np.reshape(np.array(direction), [self.ndim] * 2)
+            direction = itk.GetMatrixFromArray(direction)
+            if presmooth > 0:
+                image = itk.smoothing_recursive_gaussian_image_filter(image, sigma=presmooth)
+            interp = SmartInterpolator.as_itk(interp, input_image=image)
+            result = itk.resample_image_filter(
+                image,
+                interpolator=interp,
+                default_pixel_value=outside_val,
+                size=size,
+                output_origin=origin,
+                output_spacing=spacing,
+                output_direction=direction,
+            )
         if in_place:
             self.update(result)
             return self
@@ -799,65 +812,42 @@ class SmartImage(object):
             return SmartImage(result)
 
     def resample_to_ref(self, ref, interp='auto', outside_val=None, in_place=False):
-        # TODO - have resample_to_ref call resample
         if interp == 'auto':
             if self.min() >= 0 and self.max() < 255 and 'f' not in str(self.dtype):
                 #  This should be a label
-                interp = sitk.sitkNearestNeighbor
+                interp = 'nearest_neighbor'
             else:
                 # This should be an image
-                interp = sitk.sitkBSpline
+                interp = 'bspline'
         if outside_val is None:
             outside_val = self.min()
-        image = self.sitk_image
-        resampleFilter = sitk.ResampleImageFilter()
-        resampleFilter.SetInterpolator(interp)
-        resampleFilter.SetDefaultPixelValue(outside_val)
+
         ref_type = get_image_type(ref)
-        if ref_type == 'smartimage' and not ref.loaded:
-            ref = ref.path
-            ref_type = 'path'
-        if ref_type == 'smartimage':
-            resampleFilter.SetReferenceImage(ref.sitk_image)
-        elif ref_type == 'sitk':
-            resampleFilter.SetReferenceImage(ref)
-        elif ref_type in ['goudapath', 'path', 'string']:
-            ref = str(ref)
-            if os.path.isdir(ref):
-                dicom_files = sorted(glob.glob(os.path.join(ref, '*.dcm')))
-                image_path = dicom_files[0]
+
+        if ref_type == 'sitk' or (ref_type == 'smartimage' and ref.image_type == 'sitk'):
+            interp = SmartInterpolator.as_sitk(interp)
+            resampleFilter = sitk.ResampleImageFilter()
+            resampleFilter.SetInterpolator(interp)
+            resampleFilter.SetDefaultPixelValue(outside_val)
+            resampleFilter.SetReferenceImage(ref if ref_type == 'sitk' else ref.sitk_image)
+            result = resampleFilter.Execute(self.sitk_image)
+            if in_place:
+                self.update(result)
+                return self
             else:
-                image_path = ref
-            file_reader = sitk.ImageFileReader()
-            file_reader.SetFileName(image_path)
-            file_reader.ReadImageInformation()
-            resampleFilter.SetSize(file_reader.GetSize())
-            resampleFilter.SetOutputOrigin(file_reader.GetOrigin())
-            resampleFilter.SetOutputSpacing(file_reader.GetSpacing())
-            resampleFilter.SetOutputDirection(file_reader.GetDirection())
-        elif ref_type == 'sitkreader':
-            resampleFilter.SetSize(ref.GetSize())
-            resampleFilter.SetOutputOrigin(ref.GetOrigin())
-            resampleFilter.SetOutputSpacing(ref.GetSpacing())
-            resampleFilter.SetOutputDirection(ref.GetDirection())
+                return SmartImage(result)
+        elif ref_type in ['itk', 'sitkreader', 'sitk', 'smartimage', 'goudapath', 'path', 'string']:
+            ref = as_image(ref)
+            size = ref.GetSize()
+            origin = ref.GetOrigin()
+            spacing = ref.GetSpacing()
+            direction = ref.GetDirection()
         elif ref_type == 'dict':
-            resampleFilter.SetSize([int(item) for item in ref['size']])
-            resampleFilter.SetOutputOrigin(ref['origin'])
-            resampleFilter.SetOutputSpacing(ref['spacing'])
-            resampleFilter.SetOutputDirection(ref['direction'])
-        elif ref_type == 'smartimage':
-            resampleFilter.SetSize(ref.GetSize().tolist())
-            resampleFilter.SetOutputOrigin(ref.GetOrigin())
-            resampleFilter.SetOutputSpacing(ref.GetSpacing())
-            resampleFilter.SetOutputDirection(ref.GetDirection())
-        else:
-            raise ValueError("Unknown reference type: '{}'".format(clean_err(type(ref))))
-        result = resampleFilter.Execute(image)
-        if in_place:
-            self.update(result)
-            return self
-        else:
-            return SmartImage(result)
+            size = ref['size']
+            origin = ref['origin']
+            spacing = ref['spacing']
+            direction = ref['direction']
+        return self.resample(size=size, origin=origin, spacing=spacing, direction=direction, outside_val=outside_val, interp=interp, in_place=in_place)
 
     def euler_transform(self,
                         rotation: Union[Sequence[float], npt.NDArray[np.floating]] = (0., ),
