@@ -718,8 +718,8 @@ class SmartImage(object):
                  origin: Union[List[float], None, np.ndarray] = None,
                  spacing: Union[float, List[float], None, np.ndarray] = None,
                  direction: Union[List[float], None, np.ndarray] = None,
-                 outside_val: float = -1000,
-                 interp: int = sitk.sitkBSpline,
+                 outside_val: Optional[float] = None,
+                 interp: Union[int, str] = 'auto',
                  presmooth: Optional[Union[bool, float]] = None,
                  dryrun: bool = False,
                  in_place: bool = False):
@@ -735,10 +735,10 @@ class SmartImage(object):
             The output spacing of the image - will default to the input spacing if None
         direction : list | None | np.ndarray
             The output direction of the image - will default to the input direction if None
-        outside_val : float
-            The default pixel value to use - the default is -1000
+        outside_val : Optional[float]
+            The default pixel value to use - the default is None, which will use the minimum value of the image
         interp : int
-            The interpolation method to use - the default is SimpleITK.sitkBSpline
+            The interpolation method to use - the default is 'auto', which will use nearest neighbor for ints and BSpline for floats
         presmooth : Optional[Union[bool, float]]
             Whether to apply a gaussian smoothing before resampling - if None, will use a sigma of 1 if the output size is smaller than the input size in all dimensions - if float, will use that as the smoothing sigma, by default None
         dryrun : bool
@@ -770,6 +770,16 @@ class SmartImage(object):
         size = [int(item) for item in size]
         spacing = np.array(spacing).tolist()
 
+        if interp == 'auto':
+            # TODO - update for int16
+            if self.min() >= 0 and self.max() < 255 and 'f' not in str(self.dtype):
+                #  This should be a label
+                interp = 'nearest_neighbor'
+            else:
+                # This should be an image
+                interp = 'bspline'
+        if outside_val is None:
+            outside_val = self.min()
         interp_name, _ = SmartInterpolator.to_string(interp)
         if presmooth is None and interp_name != 'nearest_neighbor':
             presmooth = np.all(self.GetSize() > size)
@@ -824,7 +834,7 @@ class SmartImage(object):
 
         ref_type = get_image_type(ref)
 
-        if ref_type == 'sitk' or (ref_type == 'smartimage' and ref.image_type == 'sitk'):
+        if ref_type == 'sitk' or (ref_type == 'smartimage' and ref.image_type == 'sitk' and ref.loaded):
             interp = SmartInterpolator.as_sitk(interp)
             resampleFilter = sitk.ResampleImageFilter()
             resampleFilter.SetInterpolator(interp)
@@ -847,6 +857,7 @@ class SmartImage(object):
             origin = ref['origin']
             spacing = ref['spacing']
             direction = ref['direction']
+
         return self.resample(size=size, origin=origin, spacing=spacing, direction=direction, outside_val=outside_val, interp=interp, in_place=in_place)
 
     def euler_transform(self,
@@ -1160,14 +1171,36 @@ class SmartImage(object):
             return self
 
         image = self.image
-        if self.image_type == 'sitk' or self.image_type == 'itk':
+        if self.image_type == 'sitk':
             result = image[key]
-            image_type = get_image_type(result)
-            if image_type in ['itk', 'sitk', 'smartimage']:
-                return as_image(result)
+        elif self.image_type == 'itk':
+            # NOTE: itk slices to an array, so we need to use a filter to preserve physical properties
+            extract_filter = itk.RegionOfInterestImageFilter.New(image)
+            input_region = image.GetBufferedRegion()
+            size = input_region.GetSize()
+            start = input_region.GetIndex()
+            for idx, item in enumerate(key):
+                if isinstance(item, slice):
+                    start[idx] = item.start
+                    size[idx] = item.stop - item.start
+                else:
+                    start[idx] = item
+                    size[idx] = 1
+            output_region = itk.ImageRegion[image.GetImageDimension()]()
+            output_region.SetIndex(start)
+            output_region.SetSize(size)
+            extract_filter.SetRegionOfInterest(output_region)
+            extract_filter.Update()
+            extract_filter.UpdateOutputInformation()
+            result = extract_filter.GetOutput()
         else:
             # Should never throw this error
             raise ValueError('Unknown image type: {}'.format(clean_err(type(image))))
+
+        image_type = get_image_type(result)
+        if image_type in ['itk', 'sitk', 'smartimage']:
+            return as_image(result)
+        return result
 
     def apply(self, op, *args, image_type=None, in_place=True, **kwargs):
         """Apply an operation to the image
