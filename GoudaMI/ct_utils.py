@@ -20,6 +20,50 @@ from GoudaMI.smart_type import SmartType
 # NOTE - reference for some interfacing: https://github.com/SimpleITK/SimpleITK/blob/4aabd77bddf508c1d55519fbf6002180a08f9208/Wrapping/Python/Python.i#L764-L794
 
 
+def wrap_bounds(fn=None, padding=0, bg_val=0):
+    """Wraps a method so that it only operates on the non-zero bounds of an image and re-pads it afterwards."""
+    def internal_wrapper(func):
+        @functools.wraps(func)
+        def wrapped_func(image, *args, **kwargs):
+            image_type = get_image_type(image)
+            image = as_image(image)
+            bounds = get_bounds(image, bg_val=bg_val)[1]
+            bound_slice = pad_bounds(bounds, padding, as_slice=True)
+            result = func(image[bound_slice].sitk_image, *args, **kwargs)
+            if not isinstance(result, (sitk.Image, SmartImage, np.ndarray)):
+                return result
+
+            low_padding = [int(item[0]) for item in bounds]
+            upper_padding = [int(side - item[1]) for side, item in zip(image.GetSize(), bounds)]
+            result = as_image(result)
+            result = result.apply(sitk.ConstantPad, low_padding, upper_padding, bg_val)
+            return as_image_type(result, image_type)
+        return wrapped_func
+    if fn is not None:
+        return internal_wrapper(fn)
+    return internal_wrapper
+
+
+def get_bounds_slicers(image, padding=0, bg_val=0):
+    bounds = get_bounds(image, bg_val=bg_val)[1]
+    bounds_slice = pad_bounds(bounds, padding, as_slice=True)
+
+    def crop_func(crop_image):
+        return crop_image[bounds_slice]
+
+    low_padding = [int(item.start) for item in bounds_slice]
+    upper_padding = [int(side - item.stop) for side, item in zip(image.GetSize(), bounds_slice)]
+
+    def uncrop_func(uncrop_image):
+        if isinstance(uncrop_image, sitk.Image):
+            return sitk.ConstantPad(uncrop_image, low_padding, upper_padding, bg_val)
+        elif isinstance(uncrop_image, SmartImage):
+            return uncrop_image.apply(sitk.ConstantPad, low_padding, upper_padding, bg_val)
+        else:
+            raise ValueError('Only sitk.Image and SmartImage are supported for get_bounds_slicers.')
+    return crop_func, uncrop_func
+
+
 def clip_image(image: ImageType, low: float, high: float):
     """Clip the intensity values in the image to a given range.
     """
@@ -45,52 +89,68 @@ def clip_image(image: ImageType, low: float, high: float):
 @wrap_image_func('sitk')
 def quick_open(img, radius=3, kernel=sitk.sitkBall):
     """Shortcut method for applying the sitk BinaryMorphologicalOpeningImageFilter"""
-    if isinstance(img, np.ndarray):
-        img = sitk.GetImageFromArray(img)
+    crop_func, uncrop_func = get_bounds_slicers(img, padding=radius + 1)
+    img = crop_func(img)
     opener = sitk.BinaryMorphologicalOpeningImageFilter()
     opener.SetKernelType(kernel)
     opener.SetKernelRadius(radius)
     opener.SetForegroundValue(1)
     opener.SetBackgroundValue(0)
-    return opener.Execute(img)
+    result = opener.Execute(img)
+    return uncrop_func(result)
 
 
 @wrap_image_func('sitk')
 def quick_close(img, radius=3, kernel=sitk.sitkBall):
     """Shortcut method for applying the sitk BinaryMorphologicalClosingImageFilter"""
-    if isinstance(img, np.ndarray):
-        img = sitk.GetImageFromArray(img)
+    crop_func, uncrop_func = get_bounds_slicers(img, padding=radius + 1)
+    img = crop_func(img)
     closer = sitk.BinaryMorphologicalClosingImageFilter()
     closer.SetKernelType(kernel)
     closer.SetKernelRadius(radius)
     closer.SetForegroundValue(1)
-    return closer.Execute(img)
+    result = closer.Execute(img)
+    return uncrop_func(result)
 
 
 @wrap_image_func('sitk')
 def quick_dilate(img, radius=3, kernel=sitk.sitkBall):
     """Shortcut method for applying the sitk BinaryDilateImageFilter"""
-    if isinstance(img, np.ndarray):
-        img = sitk.GetImageFromArray(img)
+    crop_func, uncrop_func = get_bounds_slicers(img, padding=radius + 1)
+    img = crop_func(img)
     dil_filter = sitk.BinaryDilateImageFilter()
     dil_filter.SetKernelType(kernel)
     dil_filter.SetKernelRadius(radius)
     dil_filter.SetForegroundValue(1)
     dil_filter.SetBackgroundValue(0)
-    return dil_filter.Execute(img)
+    result = dil_filter.Execute(img)
+    return uncrop_func(result)
 
 
 @wrap_image_func('sitk')
 def quick_erode(img, radius=3, kernel=sitk.sitkBall):
     """Shortcut for applying the sitk BinaryErodeImageFilter"""
-    if isinstance(img, np.ndarray):
-        img = sitk.GetImageFromArray(img)
+    crop_func, uncrop_func = get_bounds_slicers(img, padding=radius + 1)
+    img = crop_func(img)
     dil_filter = sitk.BinaryErodeImageFilter()
     dil_filter.SetKernelType(kernel)
     dil_filter.SetKernelRadius(radius)
     dil_filter.SetForegroundValue(1)
     dil_filter.SetBackgroundValue(0)
-    return dil_filter.Execute(img)
+    result = dil_filter.Execute(img)
+    return uncrop_func(result)
+
+
+@wrap_image_func('sitk')
+def quick_median(img, radius=3, kernel=sitk.sitkBall):
+    crop_func, uncrop_func = get_bounds_slicers(img, padding=radius + 1)
+    img = crop_func(img)
+    dil_filter = sitk.BinaryMedianImageFilter()
+    dil_filter.SetRadius(radius)
+    dil_filter.SetForegroundValue(1)
+    dil_filter.SetBackgroundValue(0)
+    result = dil_filter.Execute(img)
+    return uncrop_func(result)
 
 
 def faster_mask_body(image, resample=True):
@@ -1453,26 +1513,6 @@ def quick_euler_3d(self,
     transform.SetRotation(*rotation.tolist())
     transform.SetTranslation(translation.tolist())
     return transform
-
-
-def wrap_bounds(func, bg_val=0):
-    """Wraps a method so that it only operates on the non-zero bounds of an image and re-pads it afterwards."""
-    @functools.wraps(func)
-    def wrapped_func(image, *args, **kwargs):
-        image_type = get_image_type(image)
-        image = as_image(image)
-        bounds = get_bounds(image, bg_val=bg_val)[1]
-        bound_slice = [slice(item[0], item[1]) for item in bounds]
-        result = func(image[bound_slice].sitk_image, *args, **kwargs)
-        if not isinstance(result, (sitk.Image, SmartImage, np.ndarray)):
-            return result
-
-        low_padding = [int(item[0]) for item in bounds]
-        upper_padding = [int(side - item[1]) for side, item in zip(image.GetSize(), bounds)]
-        result = as_image(result)
-        result = result.apply(sitk.ConstantPad, low_padding, upper_padding, bg_val)
-        return as_image_type(result, image_type)
-    return wrapped_func
 
 
 @wrap_image_func('sitk')
