@@ -61,20 +61,22 @@ def wrap4vtk(func):
         image = itk.vtk_image_from_image(image)
         result = func(image, *args, **kwargs)
 
-        stencil = vtk.vtkPolyDataToImageStencil()
-        stencil.SetInputData(result)
-        stencil.SetInformationInput(image)
-        stencil.Update()
+        if isinstance(result, vtk.vtkPolyData):
+            stencil = vtk.vtkPolyDataToImageStencil()
+            stencil.SetInputData(result)
+            stencil.SetInformationInput(image)
+            stencil.Update()
 
-        converter = vtk.vtkImageStencilToImage()
-        converter.SetInputData(stencil.GetOutput())
-        converter.SetInsideValue(1)
-        converter.SetOutsideValue(0)
-        converter.SetOutputScalarTypeToUnsignedChar()
-        converter.Update()
+            converter = vtk.vtkImageStencilToImage()
+            converter.SetInputData(stencil.GetOutput())
+            converter.SetInsideValue(1)
+            converter.SetOutsideValue(0)
+            converter.SetOutputScalarTypeToUnsignedChar()
+            converter.Update()
+            result = itk.image_from_vtk_image(converter.GetOutput())
+        else:
+            result = itk.image_from_vtk_image(result)
 
-        result = itk.image_from_vtk_image(converter.GetOutput())
-        #FIXME - result may have different direction from input image
         if input_type.startswith('Smart'):
             _, default_type = input_type.split(',')
             result = SmartImage(result, default_type=default_type)
