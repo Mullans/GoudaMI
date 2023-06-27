@@ -120,10 +120,14 @@ def get_comparison_metrics(label_image, pred_image, overlap_metrics=True, distan
         if surface_dice:
             if label not in pred_stats.GetLabels():
                 warnings.warn('Missing label in predicted image - defaulting surface dice to 0')
-                nsd = 0
+                image_results[label]['NSD'] = 0
             else:
                 nsd = normalized_surface_dice(label_image == label, pred_image == label, tol=nsd_tol[label_idx])
-            image_results[label]['NSD'] = float(nsd)
+                if gouda.is_iter(nsd_tol[label_idx]):
+                    for tol, val in zip(nsd_tol[label_idx], nsd):
+                        image_results[label]['NSD{}'.format(tol)] = float(val)
+                else:
+                    image_results[label]['NSD'] = float(nsd)
     return image_results
 
 

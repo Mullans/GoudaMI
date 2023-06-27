@@ -46,7 +46,7 @@ def wrap_bounds(fn=None, padding=0, bg_val=0):
 
 def get_bounds_slicers(image, padding=0, bg_val=0):
     bounds = get_bounds(image, bg_val=bg_val)[1]
-    bounds_slice = pad_bounds(bounds, padding, as_slice=True)
+    bounds_slice = pad_bounds(bounds, padding, image_size=image.GetSize(), as_slice=True)
 
     def crop_func(crop_image):
         return crop_image[bounds_slice]
@@ -142,7 +142,7 @@ def quick_erode(img, radius=3, kernel=sitk.sitkBall):
 
 
 @wrap_image_func('sitk')
-def quick_median(img, radius=3, kernel=sitk.sitkBall):
+def quick_median(img, radius=3):
     crop_func, uncrop_func = get_bounds_slicers(img, padding=radius + 1)
     img = crop_func(img)
     dil_filter = sitk.BinaryMedianImageFilter()
@@ -614,7 +614,7 @@ def resample_dryrun(size, spacing, new_spacing=None, new_size=None):
         raise ValueError('Either new_spacing or new_size must not be None')
 
 
-def read_meta(image_path):
+def read_meta(image_path, load_private_tags=True):
     if 'goudapath' in str(type(image_path)):
         image_path = image_path.path
     if os.path.isdir(image_path):
@@ -631,6 +631,7 @@ def read_meta(image_path):
             warnings.warn('Meta is only read for a single dcm file in the directory. Use GoudaMI.io.read_dicom_as_sitk for all slices.')
 
     file_reader = sitk.ImageFileReader()
+    file_reader.SetLoadPrivateTags(load_private_tags)
     file_reader.SetFileName(image_path)
     file_reader.ReadImageInformation()
     return file_reader
@@ -766,7 +767,7 @@ def get_shared_bounds(*masks, target_label: int = 1, extent='max', as_slice: boo
     return pad_bounds(bounds, padding, as_slice=as_slice)
 
 
-def pad_bounds(bounds, padding, as_slice=False):
+def pad_bounds(bounds, padding, image_size=None, as_slice=False):
     """Add padding to bounds
 
     Parameters
@@ -775,15 +776,26 @@ def pad_bounds(bounds, padding, as_slice=False):
         The bounds to pad - should be in format [[lower_bound, upper_bound], ...] for each dimension
     padding : int | Iterable[int] | Iterable[Iterable[int, int]]
         The padding to apply, can be a single value for all padding, a single value per dimension, or a lower and upper value per dimension
+    image_size : Optional[int | Iterable[int]]
+        The maximum size to allow padding to extend to, by default None (no limit)
     as_slice : bool, optional
         Whether to return the bounds as a slice, by default False
+
+    NOTE
+    ----
+    Padding will be applied to the lower bound and upper bound of each dimension. The lower bounds will not pad beyond 0 (4 padding to a start of 2 will be 0, not -2). If image_size is provided, the upper bound will not pad beyond the image size (4 padding to a stop of 98 with image size of 100 will be 100, not 102).
     """
     bounds = [item.copy() for item in bounds]
     padding = gouda.force_len(padding, len(bounds))
+    if image_size is not None:
+        image_size = gouda.force_len(image_size, len(bounds))
     for idx in range(len(bounds)):
         axis_pad = gouda.force_len(padding[idx], 2)
         bounds[idx][0] = max(bounds[idx][0] - axis_pad[0], 0)
-        bounds[idx][1] += axis_pad[1]
+        if image_size is None:
+            bounds[idx][1] += axis_pad[1]
+        else:
+            bounds[idx][1] = min(bounds[idx][1] + axis_pad[1], image_size[idx])
     if as_slice:
         return tuple([slice(*b) for b in bounds])
     else:

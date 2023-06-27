@@ -9,7 +9,7 @@ import SimpleITK as sitk
 
 from GoudaMI.constants import MIN_INTENSITY_PULMONARY_CT
 from GoudaMI.convert import as_array
-from GoudaMI.ct_utils import resample_to_ref, resample_rescale, remove_small_items
+from GoudaMI.ct_utils import resample_to_ref, resample_rescale, remove_small_items, quick_close
 from GoudaMI.smart_image import SmartImage, as_image, get_image_type
 
 
@@ -303,6 +303,32 @@ def segment_lungs(image, lower_threshold=-940, max_ratio=100, downscale=True):
     else:
         output = sitk.BinaryMorphologicalClosing(output, 5, sitk.sitkBall)
     return sitk.Cast(output, 1)
+
+
+def segment_lungs_v2(image, prefilter=True):
+    image = image.astype('int16')
+    if prefilter:
+        filt = sitk.MedianImageFilter()
+        filt.SetRadius(3)
+        image = image.apply(filt.Execute)
+    thresh_label = image.apply(sitk.BinaryThreshold, lowerThreshold=-1000, upperThreshold=-250, insideValue=1, outsideValue=0)
+    thresh_label = thresh_label.astype('uint8')
+    thresh_label = quick_close(thresh_label, radius=1)
+
+    thresh_cc = thresh_label.cc
+    thresh_stats = thresh_cc.label_shape_stats()
+    change_map = {}
+    for item in thresh_stats.GetLabels():
+        if thresh_stats.GetPhysicalSize(item) < 20000:
+            change_map[item] = 0
+        elif thresh_stats.GetNumberOfPixelsOnBorder(item) > 10000:
+            change_map[item] = 0
+        elif thresh_stats.GetCentroid(item)[2] < image.GetSize()[2] // 2:
+            change_map[item] = 0
+        else:
+            change_map[item] = 1
+    thresh_label = thresh_cc.change_label(change_map)
+    return thresh_label.astype('uint8')
 
 
 def lung_connected_components(image, max_ratio=10):
