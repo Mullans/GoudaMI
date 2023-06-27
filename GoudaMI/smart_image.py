@@ -979,12 +979,30 @@ class SmartImage(object):
         else:
             raise ValueError('self.image is type {}'.format(clean_err(type(image))))
 
+    def __ge__(self, other):
+        image = self.image
+        if self.image_type == 'sitk':
+            return self.__perform_op(sitk.GreaterEqual, None, other, in_place=False)
+        elif self.image_type == 'itk':
+            raise ValueError("Comparison operators are not supported yet for itk")
+        else:
+            raise ValueError('self.image is type {}'.format(clean_err(type(image))))
+
     def __lt__(self, other):
         image = self.image
         if self.image_type == 'sitk':
             if isinstance(other, SmartImage):  # unwrap other as-needed
                 other = other.sitk_image
             return SmartImage(image.__lt__(other))
+        elif self.image_type == 'itk':
+            raise ValueError("Comparison operators are not supported yet for itk")
+        else:
+            raise ValueError('self.image is type {}'.format(clean_err(type(image))))
+
+    def __le__(self, other):
+        image = self.image
+        if self.image_type == 'sitk':
+            return self.__perform_op(sitk.LessEqual, None, other, in_place=False)
         elif self.image_type == 'itk':
             raise ValueError("Comparison operators are not supported yet for itk")
         else:
@@ -1169,6 +1187,8 @@ class SmartImage(object):
             return self.as_view()
         elif key == 'smart':
             return self
+        elif isinstance(key, int) and self.is_vector():
+            return SmartImage(sitk.VectorIndexSelectionCast(self.sitk_image, key))
 
         image = self.image
         if self.image_type == 'sitk':
