@@ -29,6 +29,8 @@ def get_image_type(image):
         return 'path'  # this should very rarely get hit
     elif "<class 'str'>" == type_str:
         return 'string'  # this could get hit for paths?
+    elif "<class 'type'>" == type_str:
+        return str(image)  # python types
     else:
         return type_str
 
@@ -38,6 +40,8 @@ class SmartType():
     # bool = -1, python int = -2, python float = -3, long double (itk) = -4
     # complex 32 = -5, complex 128 = -6
     # There are many more, but these are the ones that seem most likely to come up
+    python2uniform = {bool: -1, int: -2, float: -3, complex: -6}
+
     numpy2uniform = {np.int8: 0, np.uint8: 1, np.int16: 2, np.uint16: 3, np.int32: 4, np.uint32: 5, np.int64: 6, np.uint64: 7, np.float32: 8, np.float64: 9, np.complex64: 11, np.complex128: -6}
     uniform2numpy = {v: k for k, v in numpy2uniform.items()}
 
@@ -57,12 +61,19 @@ class SmartType():
 
     uniform2sitk = {v: k for k, v in sitk2uniform.items()}
 
+    # sitkstring2uniform = ', '.join(f"'{sitk.Image(1, 1, key).GetPixelIDTypeAsString()}': {val}" for key, val in SmartType.sitk2uniform.items())
+    sitkstring2uniform = {
+        '8-bit signed integer': 0, '8-bit unsigned integer': 1, '16-bit signed integer': 2, '16-bit unsigned integer': 3, '32-bit signed integer': 4, '32-bit unsigned integer': 5, '64-bit signed integer': 6, '64-bit unsigned integer': 7, '32-bit float': 8, '64-bit float': 9, 'complex of 32-bit float': -5, 'complex of 64-bit float': 11, 'vector of 8-bit signed integer': 12, 'vector of 8-bit unsigned integer': 13, 'vector of 16-bit signed integer': 14, 'vector of 16-bit unsigned integer': 15, 'vector of 32-bit signed integer': 16, 'vector of 32-bit unsigned integer': 17, 'vector of 64-bit signed integer': 18, 'vector of 64-bit unsigned integer': 19, 'vector of 32-bit float': 20, 'vector of 64-bit float': 21, 'label of 8-bit unsigned integer': 22, 'label of 16-bit unsigned integer': 23, 'label of 32-bit unsigned integer': 24, 'label of 64-bit unsigned integer': 25,
+
+    }
+
     string2uniform = {
         'int8': 0, 'uint8': 1, 'int16': 2, 'uint16': 3, 'int32': 4, 'uint32': 5, 'int64': 6, 'uint64': 7, 'float32': 8, 'float64': 9, 'double': 9, 'complex64': 11,
         'vector int8': 12, 'vector uint8': 13, 'vector int16': 14, 'vector uint16': 15, 'vector int32': 16, 'vector uint32': 17, 'vector int64': 18, 'vector uint64': 19, 'vector float32': 20, 'vector float64': 21, 'vector double': 21,
         'label uint8': 22, 'label uint16': 23, 'label uint32': 24, 'label uint64': 25,
         'bool': -1, 'int': -2, 'float': -3, 'long double': -4, 'complex 32': -5, 'complex 128': -6
     }
+
     uniform2string = {v: k for k, v in string2uniform.items()}
     uniform2string[9] = 'float64'  # float64 = double, but is a better string rep.
     uniform2string[21] = 'vector float64'
@@ -76,6 +87,7 @@ class SmartType():
             data_type = data_type.GetPixelID()
         elif type_name == 'itk':
             data_type = itk.template(data_type)[1][0]
+        # `else` is assumed to be a class/data type rather than a string or image object
 
         if isinstance(data_type, np.dtype):
             data_type = str(data_type)  # strings keys are the same as numpy string equivalents
@@ -98,8 +110,11 @@ class SmartType():
             item_type = SmartType.sitk2uniform.get(data_type)
             if item_type is not None:
                 return item_type
-        elif isinstance(data_type, str):  # TODO - check for SimpleITK strings, ie image.GetPixelIDTypeAsString()
-            item_type = SmartType.string2uniform.get(data_type, None)
+        elif isinstance(data_type, str):
+            item_type = SmartType.string2uniform.get(data_type)
+            if item_type is None:
+                # Backup check for SimpleITK strings, ie image.GetPixelIDTypeAsString()
+                item_type = SmartType.sitkstring2uniform.get(data_type)
             if item_type is None:
                 pass
             elif item_type == -1:
