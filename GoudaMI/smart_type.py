@@ -30,7 +30,7 @@ def get_image_type(image):
     elif "<class 'str'>" == type_str:
         return 'string'  # this could get hit for paths?
     elif "<class 'type'>" == type_str:
-        return str(image)  # python types
+        return str(image)  # python primatives
     else:
         return type_str
 
@@ -38,11 +38,12 @@ def get_image_type(image):
 class SmartType():
     # Unused types:
     # bool = -1, python int = -2, python float = -3, long double (itk) = -4
-    # complex 32 = -5, complex 128 = -6
+    # complex 32 = -5, complex 128 = -6, python complex = -6 (numpy interprets python complex as complex 128)
     # There are many more, but these are the ones that seem most likely to come up
-    python2uniform = {bool: -1, int: -2, float: -3, complex: -6}
+    python2uniform = {bool: -1, int: -2, float: -3, complex: -6, "<class 'bool'>": -1, "<class 'int'>": -2, "<class 'float'>": -3}
+    python2cast = {-1: 1, -2: 6, -3: 9}  # SimpleITK uses uint8 instead of bool, and both describe float/int by bit size. We cast based on how numpy casts these types.
 
-    numpy2uniform = {np.int8: 0, np.uint8: 1, np.int16: 2, np.uint16: 3, np.int32: 4, np.uint32: 5, np.int64: 6, np.uint64: 7, np.float32: 8, np.float64: 9, np.complex64: 11, np.complex128: -6}
+    numpy2uniform = {np.int8: 0, np.uint8: 1, np.int16: 2, np.uint16: 3, np.int32: 4, np.uint32: 5, np.int64: 6, np.uint64: 7, np.float32: 8, np.float64: 9, np.complex64: 11, np.complex128: -6, bool: -1, np.int64: -2, np.float64: -3}
     uniform2numpy = {v: k for k, v in numpy2uniform.items()}
 
     if hasattr(itk, 'is_dummy'):
@@ -53,6 +54,7 @@ class SmartType():
         uniform2itk = {k: v for v, k in itk2uniform.items()}
         # NOTE - SL doesn't seem to be wrapped as often as SI, and long seems to be more platform dependent than int or long long. So we'll just default away from long types
         # https://www.intel.com/content/www/us/en/developer/articles/technical/size-of-long-integer-type-on-different-architecture-and-os.html
+        # NOTE - ITK seems to use SL when converting numpy.int64/python int arrays. This isn't wrapped in default ITK installs...
         uniform2itk[4] = itk.SI  # signed integer over signed long - SL often not wrapped
         uniform2itk[5] = itk.UI  # unsigned integer of unsigned long
         # ! Ignoring vector types for ITK for now... there's ~ 105 total types in ITK, and we only need 10 for numpy, so we'll just ignore the rest for now. Use itk.Image.GetTypes() to see them all. --- ITK vector types pre-define the ndim and number of components [2, 3, 4] for each type... itk.Image[itk.Vector[itk.F, 3], 3] is a 3D image with 3 components per pixel, each of type float32
@@ -63,8 +65,7 @@ class SmartType():
 
     # sitkstring2uniform = ', '.join(f"'{sitk.Image(1, 1, key).GetPixelIDTypeAsString()}': {val}" for key, val in SmartType.sitk2uniform.items())
     sitkstring2uniform = {
-        '8-bit signed integer': 0, '8-bit unsigned integer': 1, '16-bit signed integer': 2, '16-bit unsigned integer': 3, '32-bit signed integer': 4, '32-bit unsigned integer': 5, '64-bit signed integer': 6, '64-bit unsigned integer': 7, '32-bit float': 8, '64-bit float': 9, 'complex of 32-bit float': -5, 'complex of 64-bit float': 11, 'vector of 8-bit signed integer': 12, 'vector of 8-bit unsigned integer': 13, 'vector of 16-bit signed integer': 14, 'vector of 16-bit unsigned integer': 15, 'vector of 32-bit signed integer': 16, 'vector of 32-bit unsigned integer': 17, 'vector of 64-bit signed integer': 18, 'vector of 64-bit unsigned integer': 19, 'vector of 32-bit float': 20, 'vector of 64-bit float': 21, 'label of 8-bit unsigned integer': 22, 'label of 16-bit unsigned integer': 23, 'label of 32-bit unsigned integer': 24, 'label of 64-bit unsigned integer': 25,
-
+        '8-bit signed integer': 0, '8-bit unsigned integer': 1, '16-bit signed integer': 2, '16-bit unsigned integer': 3, '32-bit signed integer': 4, '32-bit unsigned integer': 5, '64-bit signed integer': 6, '64-bit unsigned integer': 7, '32-bit float': 8, '64-bit float': 9, 'complex of 32-bit float': -5, 'complex of 64-bit float': 11, 'vector of 8-bit signed integer': 12, 'vector of 8-bit unsigned integer': 13, 'vector of 16-bit signed integer': 14, 'vector of 16-bit unsigned integer': 15, 'vector of 32-bit signed integer': 16, 'vector of 32-bit unsigned integer': 17, 'vector of 64-bit signed integer': 18, 'vector of 64-bit unsigned integer': 19, 'vector of 32-bit float': 20, 'vector of 64-bit float': 21, 'label of 8-bit unsigned integer': 22, 'label of 16-bit unsigned integer': 23, 'label of 32-bit unsigned integer': 24, 'label of 64-bit unsigned integer': 25
     }
 
     string2uniform = {
@@ -77,6 +78,7 @@ class SmartType():
     uniform2string = {v: k for k, v in string2uniform.items()}
     uniform2string[9] = 'float64'  # float64 = double, but is a better string rep.
     uniform2string[21] = 'vector float64'
+    string_dicts = [string2uniform, sitkstring2uniform, python2uniform]  # Dicts to compare strings describing types against
 
     @staticmethod
     def to_uniform(data_type):
@@ -87,8 +89,7 @@ class SmartType():
             data_type = data_type.GetPixelID()
         elif type_name == 'itk':
             data_type = itk.template(data_type)[1][0]
-        # `else` is assumed to be a class/data type rather than a string or image object
-
+        # `else` is assumed to be a class/data type rather than an image object
         if isinstance(data_type, np.dtype):
             data_type = str(data_type)  # strings keys are the same as numpy string equivalents
         if 'numpy' in str(data_type):
@@ -111,19 +112,38 @@ class SmartType():
             if item_type is not None:
                 return item_type
         elif isinstance(data_type, str):
-            item_type = SmartType.string2uniform.get(data_type)
-            if item_type is None:
-                # Backup check for SimpleITK strings, ie image.GetPixelIDTypeAsString()
-                item_type = SmartType.sitkstring2uniform.get(data_type)
-            if item_type is None:
-                pass
-            elif item_type == -1:
-                raise ValueError('`bool` types are not supported for images. Please use `uint8` instead.')
-            elif item_type == -2 or item_type == -3:
-                raise ValueError('`int` and `float` types are not supported. Please use `int32`, `int64`, `float32`, and `float64` instead.')
-            elif item_type >= 0:
-                return item_type
+            for item in SmartType.string_dicts:
+                if data_type in item:
+                    return item.get(data_type)
+
+            # if '<class' in data_type:
+            #     item_type = SmartType.python2uniform.get(data_type)
+            # else:
+            #     item_type = SmartType.string2uniform.get(data_type)
+            # if item_type is None:
+            #     # Backup check for SimpleITK strings, ie image.GetPixelIDTypeAsString()
+            #     item_type = SmartType.sitkstring2uniform.get(data_type)
+            # if item_type is not None:
+            #     return item_type
+        elif isinstance(data_type, type):
+            item_type = SmartType.python2uniform.get(data_type)
+            return item_type
         raise ValueError(f'Unknown data type: `{data_type}`', type(data_type))
+
+    @staticmethod
+    def _try_cast(data_type, dst_dict, dst_name, allow_cast=True):
+        """ITK and SimpleITK can't directly handle python int/float types, so we need to cast them to the closest type."""
+        if data_type in dst_dict:
+            return data_type
+        elif allow_cast:
+            if data_type in SmartType.python2cast:
+                data_type = SmartType.python2cast.get(data_type)
+                return data_type
+            else:
+                # Should never reach - this is just a backup if `to_uniform` didn't catch something
+                raise ValueError(f'Unrecognized data type `{data_type}`')
+        else:
+            raise ValueError(f'Data type `{SmartType.uniform2string.get(data_type)}` is not currently supported for {dst_name} types.')
 
     @staticmethod
     def as_numpy(data_type):
@@ -133,14 +153,16 @@ class SmartType():
         return SmartType.uniform2numpy.get(data_type)
 
     @staticmethod
-    def as_itk(data_type):
+    def as_itk(data_type, allow_cast=True):
         # NOTE - probably need to handle conversion to itk vector types here... extra kwarg for num components?
         data_type = SmartType.to_uniform(data_type)
+        data_type = SmartType._try_cast(data_type, SmartType.uniform2itk, 'ITK', allow_cast=allow_cast)
         return SmartType.uniform2itk.get(data_type)
 
     @staticmethod
-    def as_sitk(data_type, vector=False):
+    def as_sitk(data_type, vector=False, allow_cast=True):
         data_type = SmartType.to_uniform(data_type)
+        data_type = SmartType._try_cast(data_type, SmartType.uniform2sitk, 'SimpleITK', allow_cast=allow_cast)
         if vector:
             if data_type < 10:
                 data_type += 12
