@@ -251,6 +251,16 @@ class SmartImage(object):
         return self.__itk_image
 
     @property
+    def itk_template(self):
+        """Return the itk template for the image type - works even if the image is not loaded"""
+        if self.image_type == 'itk' and self.loaded:
+            return itk.template(self.itk_image)
+        else:
+            dtype = SmartType.as_itk(self.dtype)
+            image_template = itk.Image[dtype, self.ndim]
+            return itk.template(image_template)
+
+    @property
     def sitk_image(self):
         if self.__updated_itk:
             self.__reset_internals()
@@ -1105,7 +1115,7 @@ class SmartImage(object):
 
         Note
         ----
-        Any SmartImage or Image objects passed as args will be converted before being passed to the op.
+        Any SmartImage or Image objects passed as args will be converted before being passed to the op. Only the `allow_autocast` of the base SmartImage object will be considered when casting.
 
         """
         autocast = self.allow_autocast if autocast is None else autocast
