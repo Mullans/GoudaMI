@@ -1081,6 +1081,9 @@ class SmartImage(object):
         # self.update(result)
         return self
 
+    def __pow__(self, other):
+        return self.__perform_op(sitk.Pow, itk.pow_image_filter, other, in_place=False)
+
     def __and__(self, other):
         return self.__perform_op(sitk.And, itk.AndImageFilter, other, in_place=False, autocast='uint8')
 
