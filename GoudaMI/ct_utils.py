@@ -153,7 +153,7 @@ def quick_median(img, radius=3):
     return uncrop_func(result)
 
 
-def faster_mask_body(image, resample=True):
+def mask_body(image, resample=True):
     # Note - rounding error may cut off the top slice during resampling
     image_type = get_image_type(image)
     sampling_info = get_sampling_info(image)
@@ -188,7 +188,7 @@ def faster_mask_body(image, resample=True):
 
 def crop_image_to_mask(image: ImageType, mask: Optional[Union[ImageType, np.ndarray]] = None, crop_z=False, crop_quantile=50, return_bounds=False):
     if mask is None:
-        mask = faster_mask_body(image)
+        mask = mask_body(image)
     mask = as_view(mask)
 
     front_view = mask.max(axis=1)
