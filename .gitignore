@@ -2,3 +2,4 @@ __pycache__
 *.pyc
 ignore_*
 GoudaMI.egg-info/
+.vscode/

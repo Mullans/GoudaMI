@@ -4,16 +4,14 @@ import shutil
 import subprocess
 import sys
 import warnings
-from typing import Callable, Optional
+from typing import Optional
 
 import gouda
 import numpy as np
 import SimpleITK as sitk
 
-from GoudaMI.optional_imports import itk, vtk
+from GoudaMI.optional_imports import itk, vtk, vtk_numpy_support
 from GoudaMI.smart_image import SmartImage, get_image_type, as_image, as_image_type, ImageType
-
-# TODO - create wrap4XXX for itk, sitk, and vtk to take any format, convert to chosen, and return as original format
 
 
 def as_array(image: ImageType) -> np.ndarray:
@@ -193,12 +191,11 @@ def convert_sitk(image):
 
 
 def sitk2vtk(sitk_pointer, nb_points=None):
-    import vtk.util.numpy_support
     numpy_array = sitk.GetArrayFromImage(sitk_pointer)
     size = list(sitk_pointer.GetSize())
     origin = list(sitk_pointer.GetOrigin())
     spacing = list(sitk_pointer.GetSpacing())
-    label = vtk.util.numpy_support.numpy_to_vtk(num_array=numpy_array.ravel(), deep=True, array_type=vtk.VTK_FLOAT)
+    label = vtk_numpy_support.numpy_to_vtk(num_array=numpy_array.ravel(), deep=True, array_type=vtk.VTK_FLOAT)
 
     # Convert the VTK array to vtkImageData
     img_vtk = vtk.vtkImageData()
@@ -262,7 +259,7 @@ def images2series(images):
     return series
 
 
-def plastimatch_rt_to_nifti(rt_path: os.PathLike, dicom_path: os.PathLike, dst_path: os.PathLike, image_dst_path: Optional[os.PathLike]=None, post_check: bool=False, verbose: bool=True) -> str:
+def plastimatch_rt_to_nifti(rt_path: os.PathLike, dicom_path: os.PathLike, dst_path: os.PathLike, image_dst_path: Optional[os.PathLike] = None, post_check: bool = False, verbose: bool = True) -> str:
     """Convert an rt_struct file to a nifti file using plastimatch
 
     Parameters
@@ -355,7 +352,7 @@ def polydata_to_point_mask(polydata, ref_image):
     SmartImage
         The resulting binary mask
     """
-    src_points = vtk.util.numpy_support.vtk_to_numpy(polydata.GetPoints().GetData())
+    src_points = vtk_numpy_support(polydata.GetPoints().GetData())
     empty_arr = np.zeros(ref_image.GetSize()[::-1])
     phys_points = np.round(src_points / ref_image.GetSpacing()).astype(int)
     for item in phys_points:
