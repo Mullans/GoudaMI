@@ -1097,7 +1097,7 @@ class SmartImage(object):
         # TODO - add itk version (may need a internal method to run a filter...)
         return self.__perform_op(sitk.ChangeLabel, None, changeMap=changeMap, in_place=in_place)
 
-    def __perform_op(self, sitk_op, itk_op, *args, self_first=True, in_place=False, autocast=None, **kwargs):
+    def __perform_op(self, sitk_op, itk_op, *args, force_type: Optional[str] = None, self_first: bool = True, in_place: bool = False, autocast: Optional[Union[bool, str]] = None, **kwargs):
         """Perform the sitk/itk operation depending on the current image type
 
         Parameters
@@ -1106,6 +1106,8 @@ class SmartImage(object):
             The sitk operation - ex. sitk.Add, sitk.Subtract
         itk_op : function
             The itk operation - ex. itk.AddImageFilter, sitk.SubtractImageFilter
+        force_type : Optional[str]
+            If set to 'sitk' or 'itk', will force the operation to use that type of image/operation
         self_first : bool
             Whether to use this image as the first argument to the op - if False, this image is the last given argument (used for __rsub__ and similar), by default True
         in_place : bool
@@ -1120,8 +1122,16 @@ class SmartImage(object):
         """
         autocast = self.allow_autocast if autocast is None else autocast
         image = self.image
+        assert force_type in ['sitk', 'itk', None], '`force_type` must be one of "sitk", "itk", or None'
+        image_type = force_type if force_type is not None else self.image_type
+        if image_type == 'itk':
+            image = self.itk_image
+        elif image_type == 'sitk':
+            image = self.sitk_image
+        else:
+            raise ValueError('Unknown image type: {}'.format(image_type))
         output_type = self.dtype
-        if self.image_type == 'sitk':
+        if image_type == 'sitk':
             if sitk_op is None:
                 raise NotImplementedError("The SimpleITK version of this operation has not been implemented for SmartImage yet")
             new_args = []
@@ -1140,7 +1150,7 @@ class SmartImage(object):
                 result = sitk_op(image, *new_args, **kwargs)
             else:
                 result = sitk_op(*new_args, image, **kwargs)
-        elif self.image_type == 'itk':
+        elif image_type == 'itk':
             if itk_op is None:
                 raise NotImplementedError("The ITK version of this operation has not been implemented for SmartImage yet")
             new_args = []
@@ -1233,7 +1243,7 @@ class SmartImage(object):
         return result
 
     def apply(self, op, *args, image_type=None, in_place=True, **kwargs):
-        """Apply an operation to the image
+        """Apply an ITK/SimpleITK operation to the image
 
         Parameters
         ----------
@@ -1244,23 +1254,24 @@ class SmartImage(object):
         in_place : bool, optional
             Whether to update the current image, by default True
         """
-        self.image  # force load
-        if image_type is None:
-            image = self.image
-        elif image_type == 'sitk':
-            image = self.sitk_image
-        elif image_type == 'itk':
-            image = self.itk_image
-        else:
-            raise ValueError('Unknown image type: {}'.format(image_type))
-        result = op(image, *args, **kwargs)
-        if in_place:
-            self.update(result)
-            return self
-        elif get_image_type(result) in ['sitk', 'itk', 'smartimage']:
-            return as_image(result)
-        else:
-            return result
+        return self.__perform_op(op, op, *args, force_type=image_type, in_place=in_place, **kwargs)
+        # self.image  # force load
+        # if image_type is None:
+        #     image = self.image
+        # elif image_type == 'sitk':
+        #     image = self.sitk_image
+        # elif image_type == 'itk':
+        #     image = self.itk_image
+        # else:
+        #     raise ValueError('Unknown image type: {}'.format(image_type))
+        # result = op(image, *args, **kwargs)
+        # if in_place:
+        #     self.update(result)
+        #     return self
+        # elif get_image_type(result) in ['sitk', 'itk', 'smartimage']:
+        #     return as_image(result)
+        # else:
+        #     return result
 
 
 ImageType = Union[SmartImage, itk.Image, sitk.Image]
