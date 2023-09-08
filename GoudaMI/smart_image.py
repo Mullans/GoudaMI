@@ -242,6 +242,7 @@ class SmartImage(object):
 
     @property
     def itk_image(self):
+        """The ITK version of the image"""
         if self.__updated_sitk:
             self.__reset_internals()
             self.__itk_image = sitk2itk(self.sitk_image)
@@ -261,7 +262,13 @@ class SmartImage(object):
             return itk.template(image_template)
 
     @property
+    def itk_type(self):
+        """The itk image type ex. itk.Image[itk.F, 3]"""
+        return itk.Image[self.itk_template[1]]
+
+    @property
     def sitk_image(self):
+        """The SimpleITK version of the image"""
         if self.__updated_itk:
             self.__reset_internals()
             self.__sitk_image = itk2sitk(self.itk_image)
