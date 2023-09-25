@@ -1770,3 +1770,45 @@ def get_vessel_image(image, hessian_sigma=1.5, alpha1=0.5, alpha2=2.0, clip_inpu
     elif output_range is not None:
         vessel_image = vessel_image.window(output_min=result_min, output_max=result_max)
     return vessel_image
+
+
+def _single_profile_func(path):
+    image = SmartImage(path)
+    return {'path': path} | image.get_physical_properties()
+
+
+def profile_images(image_paths: list[str], num_workers: int = -1, pbar: bool = True):
+    """Find the physical properties of a list of images
+
+    Parameters
+    ----------
+    image_paths : list[str]
+        The list of image paths to profile
+    num_workers : int, optional
+        The number of workers in the multiprocessing Pool. If -1, uses os.cpu_count. By default -1
+    pbar : bool, optional
+        If True and tqdm installed, displays a progress bar. By default True
+
+    Returns
+    -------
+    list[dict]
+        A list where each item has the path, size, spacing, origin, direction, and dtype of the image.
+
+    See Also
+    --------
+    GoudaMI.SmartImage.get_physical_properties
+    """
+    import multiprocessing as mp
+    import os
+    try:
+        import tqdm.auto as tqdm
+    except (ImportError, ModuleNotFoundError):
+        tqdm = lambda x: x  # noqa: E731 - identity lambda just for this scope
+
+    if num_workers == -1:
+        num_workers = os.cpu_count()
+    with mp.Pool(num_workers) as pool:
+        all_results = []
+        for result in tqdm.tqdm(pool.starmap(_single_profile_func, [(path,) for path in image_paths])):
+            all_results.append(result)
+    return all_results
