@@ -1777,22 +1777,34 @@ def _single_profile_func(path):
     return {'path': path} | image.get_physical_properties()
 
 
-def profile_images(image_paths: list[str], num_workers: int = -1, pbar: bool = True):
+def _single_profile_values_func(path):
+    image = SmartImage(path)
+    image.sitk_image  # force load the image
+    return {'path': path} | image.get_physical_properties() | {'min_intensity': image.min(), 'max_intensity': image.max(), 'mean_intensity': image.mean(), 'std_intensity': image.stddev()}
+
+
+def profile_images(image_paths: list[str], profile_values: bool = False, num_workers: int = -1, pbar: bool = True) -> list[dict]:
     """Find the physical properties of a list of images
 
     Parameters
     ----------
     image_paths : list[str]
         The list of image paths to profile
+    profile_values : bool, optional
+        If True, also profiles the values of the image, by default False
     num_workers : int, optional
         The number of workers in the multiprocessing Pool. If -1, uses os.cpu_count. By default -1
     pbar : bool, optional
-        If True and tqdm installed, displays a progress bar. By default True
+        If True and tqdm installed, displays a progress bar that updates as each process returns. By default True
+
+    Note
+    ----
+    By default, this only reads the meta-data of the image rather than loading the full image to speed up profiling. When `profile_values` is True, the image is loaded to examine the values, which is generally significantly slower due to the added computation of reading and iterating over the image data.
 
     Returns
     -------
     list[dict]
-        A list where each item has the path, size, spacing, origin, direction, and dtype of the image.
+        A list where each dict item has the path, size, spacing, origin, direction, and dtype of the image.
 
     See Also
     --------
@@ -1800,15 +1812,21 @@ def profile_images(image_paths: list[str], num_workers: int = -1, pbar: bool = T
     """
     import multiprocessing as mp
     import os
-    try:
-        import tqdm.auto as tqdm
-    except (ImportError, ModuleNotFoundError):
-        tqdm = lambda x: x  # noqa: E731 - identity lambda just for this scope
+
+    progress_bar = lambda x: x  # noqa: E731 - identity lambda just for this scope
+    if pbar:
+        try:
+            import tqdm.auto as tqdm
+            progress_bar = tqdm.tqdm
+        except (ImportError, ModuleNotFoundError):
+            warnings.warn('tqdm not installed, not displaying progress bar')
 
     if num_workers == -1:
         num_workers = os.cpu_count()
+    profile_func = _single_profile_values_func if profile_values else _single_profile_func
     with mp.Pool(num_workers) as pool:
         all_results = []
-        for result in tqdm.tqdm(pool.starmap(_single_profile_func, [(path,) for path in image_paths])):
-            all_results.append(result)
+        res = [pool.apply_async(profile_func, (path,)) for path in image_paths]
+        for result in progress_bar(res):
+            all_results.append(result.get())
     return all_results
